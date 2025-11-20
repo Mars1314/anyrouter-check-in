@@ -96,8 +96,64 @@ class Database:
 				cursor.execute("ALTER TABLE accounts ADD COLUMN cookies TEXT")
 				cursor.execute("ALTER TABLE accounts ADD COLUMN api_user TEXT")
 				cursor.execute("ALTER TABLE accounts ADD COLUMN auth_type TEXT DEFAULT 'password'")
-				# 将 username 和 password 改为可空
-				print('[DATABASE] Migrated database schema to support both auth types')
+				print('[DATABASE] Added new fields for dual auth support')
+
+			# 检查并修复 username 字段的 NOT NULL 约束
+			# SQLite 不支持直接修改约束，需要重建表
+			try:
+				# 检查是否存在 NOT NULL 约束问题
+				cursor.execute("PRAGMA table_info(accounts)")
+				columns = cursor.fetchall()
+				username_col = [col for col in columns if col[1] == 'username']
+
+				if username_col and username_col[0][3] == 1:  # notnull = 1
+					print('[DATABASE] Migrating to remove NOT NULL constraint from username...')
+
+					# 重建表
+					cursor.execute(
+						'''
+						CREATE TABLE accounts_new (
+							id INTEGER PRIMARY KEY AUTOINCREMENT,
+							name TEXT NOT NULL,
+							username TEXT,
+							password TEXT,
+							cookies TEXT,
+							api_user TEXT,
+							auth_type TEXT DEFAULT 'password',
+							provider TEXT DEFAULT 'anyrouter',
+							enabled INTEGER DEFAULT 1,
+							created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+							updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+						)
+						'''
+					)
+
+					# 复制数据 - 检查列是否存在
+					cursor.execute("PRAGMA table_info(accounts)")
+					old_columns = [col[1] for col in cursor.fetchall()]
+
+					# 构建列名列表（只复制存在的列）
+					copy_columns = []
+					for col in ['id', 'name', 'username', 'password', 'cookies', 'api_user', 'auth_type', 'provider', 'enabled', 'created_at', 'updated_at']:
+						if col in old_columns:
+							copy_columns.append(col)
+
+					copy_sql = f'''
+						INSERT INTO accounts_new ({', '.join(copy_columns)})
+						SELECT {', '.join(copy_columns)}
+						FROM accounts
+					'''
+					cursor.execute(copy_sql)
+
+					# 删除旧表
+					cursor.execute('DROP TABLE accounts')
+
+					# 重命名新表
+					cursor.execute('ALTER TABLE accounts_new RENAME TO accounts')
+
+					print('[DATABASE] Migration completed: username is now nullable')
+			except Exception as e:
+				print(f'[DATABASE] Migration check: {e}')
 
 			# 签到记录表
 			cursor.execute(
