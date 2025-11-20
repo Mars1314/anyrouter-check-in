@@ -42,23 +42,46 @@ async def login_anyrouter(username: str, password: str):
 				await page.wait_for_load_state('domcontentloaded')
 				await page.wait_for_timeout(2000)
 
-				# 查找并填写用户名
+				# 关闭系统公告弹窗（如果有）
+				print('[LOGIN] Closing announcement modal if exists')
+				try:
+					# 查找并点击"关闭公告"或"今日关闭"按钮
+					close_buttons = page.locator('button:has-text("关闭公告"), button:has-text("今日关闭"), .semi-modal-close')
+					if await close_buttons.count() > 0:
+						await close_buttons.first.click()
+						await page.wait_for_timeout(500)
+						print('[LOGIN] Announcement modal closed')
+				except Exception:
+					print('[LOGIN] No announcement modal found')
+
+				# 点击"使用 邮箱或用户名 登录"按钮
+# 				print('[LOGIN] Clicking email/username login button')
+# 				email_login_button = page.locator('button:has-text("使用 邮箱或用户名 登录")').first
+# 				await email_login_button.click()
+# 				await page.wait_for_timeout(1500)
+
+				# 等待表单出现
+# 				print('[LOGIN] Waiting for login form to appear')
+# 				await page.wait_for_selector('input#username', timeout=5000)
+
+				# 查找并填写用户名/邮箱（使用 ID 选择器）
 				print(f'[LOGIN] Filling username: {username}')
-				username_input = page.locator('input[type="text"], input[type="email"], input[name*="user"], input[placeholder*="用户名"], input[placeholder*="邮箱"]').first
+				username_input = page.locator('input#username')
+				await username_input.click()
 				await username_input.fill(username)
+				await page.wait_for_timeout(500)
 
-				# 查找并填写密码
+				# 查找并填写密码（使用 ID 选择器）
 				print('[LOGIN] Filling password')
-				password_input = page.locator('input[type="password"]').first
+				password_input = page.locator('input#password')
+				await password_input.click()
 				await password_input.fill(password)
+				await page.wait_for_timeout(500)
 
-				# 等待一下，确保输入完成
-				await page.wait_for_timeout(1000)
-
-				# 查找并点击登录按钮
-				print('[LOGIN] Clicking login button')
-				login_button = page.locator('button:has-text("登录"), button:has-text("登入"), button:has-text("Sign in"), button[type="submit"]').first
-				await login_button.click()
+				# 查找并点击"继续"按钮
+				print('[LOGIN] Clicking submit button')
+				submit_button = page.locator('button[type="submit"]:has-text("继续")').first
+				await submit_button.click()
 
 				# 等待登录完成（等待跳转或特定元素出现）
 				print('[LOGIN] Waiting for login to complete...')

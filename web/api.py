@@ -14,10 +14,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # 添加项目根目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 from utils.auto_login import login_anyrouter
-from web.database import db
+
+# 使用相对导入避免路径问题
+if __name__ == '__main__':
+    from database import db
+else:
+    from web.database import db
 
 app = FastAPI(title='AnyRouter 签到管理系统', version='1.0.0')
 
@@ -78,9 +84,12 @@ async def get_accounts():
 	"""获取所有账号列表"""
 	try:
 		accounts = db.get_all_accounts()
-		# 不返回密码
+		# 不返回密码，并附加最新余额信息
 		for account in accounts:
 			account.pop('password', None)
+			# 获取最新余额
+			balance = db.get_latest_balance(account['id'])
+			account['balance'] = balance
 		return {'success': True, 'data': accounts}
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=str(e))

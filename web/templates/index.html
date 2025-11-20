@@ -81,9 +81,11 @@
                                 </span>
                             </td>
                             <td class="py-3 px-4">
-                                <button @click="loadAccountBalance(account.id)" class="text-blue-600 hover:underline">
-                                    查看余额
-                                </button>
+                                <div v-if="account.balance" class="text-sm">
+                                    <div class="font-medium text-green-600">💰 ${{ account.balance.quota }}</div>
+                                    <div class="text-gray-500 text-xs">已用: ${{ account.balance.used_quota }}</div>
+                                </div>
+                                <div v-else class="text-gray-400 text-sm">--</div>
                             </td>
                             <td class="py-3 px-4">
                                 <div class="flex gap-2">
@@ -279,15 +281,29 @@
                         this.showMessage('请填写用户名和密码', 'error');
                         return;
                     }
+
+                    // 提示用户即将打开浏览器
+                    if (!confirm('将打开浏览器窗口进行登录测试，请稍候\n\n注意：\n1. 浏览器会自动填写账号密码\n2. 请等待自动登录完成\n3. 不要关闭浏览器窗口\n4. 测试完成后浏览器会自动关闭\n\n点击"确定"开始测试')) {
+                        return;
+                    }
+
                     this.isTesting = true;
+                    this.showMessage('正在打开浏览器测试登录，请稍候...', 'success');
+
+                    // 暂时隐藏模态框，避免挡住浏览器
+                    const originalDisplay = this.showAddAccountModal;
+                    this.showAddAccountModal = false;
+
                     try {
                         const response = await axios.post('/api/test-login', {
                             username: this.accountForm.username,
                             password: this.accountForm.password
                         });
-                        this.showMessage('登录测试成功！', 'success');
+                        this.showAddAccountModal = originalDisplay;
+                        this.showMessage('✅ 登录测试成功！账号密码正确', 'success');
                     } catch (error) {
-                        this.showMessage(error.response?.data?.detail || '登录测试失败', 'error');
+                        this.showAddAccountModal = originalDisplay;
+                        this.showMessage('❌ ' + (error.response?.data?.detail || '登录测试失败'), 'error');
                     } finally {
                         this.isTesting = false;
                     }

@@ -12,13 +12,19 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 # 添加项目根目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 from checkin import check_in_account
 from utils.auto_login import login_anyrouter
 from utils.config import AccountConfig, AppConfig
 from utils.notify import notify
-from web.database import db
+
+# 使用相对导入避免路径问题
+if __name__ == '__main__':
+    from database import db
+else:
+    from web.database import db
 
 
 async def auto_checkin_task():
