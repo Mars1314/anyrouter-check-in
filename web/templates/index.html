@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AnyRouter 签到管理系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="app" class="container mx-auto px-4 py-8">
+        <!-- 头部 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">🤖 AnyRouter 签到管理系统</h1>
+            <p class="text-gray-600">自动化管理多账号签到，轻松获取每日奖励</p>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-gray-500 text-sm">总账号数</div>
+                <div class="text-3xl font-bold text-blue-600">{{ statistics.total_accounts }}</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-gray-500 text-sm">已启用账号</div>
+                <div class="text-3xl font-bold text-green-600">{{ statistics.enabled_accounts }}</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-gray-500 text-sm">今日签到成功</div>
+                <div class="text-3xl font-bold text-purple-600">{{ statistics.today_checkin_success }}</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-gray-500 text-sm">总余额</div>
+                <div class="text-3xl font-bold text-orange-600">${{ statistics.total_quota?.toFixed(2) || 0 }}</div>
+            </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-6 flex gap-4">
+            <button @click="showAddAccountModal = true" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg transition">
+                ➕ 添加账号
+            </button>
+            <button @click="checkinAll" :disabled="isCheckingIn" class="bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-lg transition disabled:opacity-50">
+                {{ isCheckingIn ? '签到中...' : '🔄 全部签到' }}
+            </button>
+            <button @click="loadAccounts" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition">
+                🔃 刷新数据
+            </button>
+        </div>
+
+        <!-- 账号列表 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-bold mb-4">账号列表</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="border-b">
+                            <th class="text-left py-3 px-4">ID</th>
+                            <th class="text-left py-3 px-4">名称</th>
+                            <th class="text-left py-3 px-4">用户名</th>
+                            <th class="text-left py-3 px-4">平台</th>
+                            <th class="text-left py-3 px-4">状态</th>
+                            <th class="text-left py-3 px-4">余额</th>
+                            <th class="text-left py-3 px-4">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="account in accounts" :key="account.id" class="border-b hover:bg-gray-50">
+                            <td class="py-3 px-4">{{ account.id }}</td>
+                            <td class="py-3 px-4 font-medium">{{ account.name }}</td>
+                            <td class="py-3 px-4">{{ account.username }}</td>
+                            <td class="py-3 px-4">
+                                <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-sm">{{ account.provider }}</span>
+                            </td>
+                            <td class="py-3 px-4">
+                                <span :class="account.enabled ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'"
+                                      class="px-2 py-1 rounded text-sm">
+                                    {{ account.enabled ? '✅ 已启用' : '❌ 已禁用' }}
+                                </span>
+                            </td>
+                            <td class="py-3 px-4">
+                                <button @click="loadAccountBalance(account.id)" class="text-blue-600 hover:underline">
+                                    查看余额
+                                </button>
+                            </td>
+                            <td class="py-3 px-4">
+                                <div class="flex gap-2">
+                                    <button @click="checkinAccount(account.id)" class="text-green-600 hover:underline text-sm">
+                                        签到
+                                    </button>
+                                    <button @click="editAccount(account)" class="text-blue-600 hover:underline text-sm">
+                                        编辑
+                                    </button>
+                                    <button @click="toggleAccount(account)" class="text-yellow-600 hover:underline text-sm">
+                                        {{ account.enabled ? '禁用' : '启用' }}
+                                    </button>
+                                    <button @click="deleteAccount(account.id)" class="text-red-600 hover:underline text-sm">
+                                        删除
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div v-if="accounts.length === 0" class="text-center py-8 text-gray-500">
+                    暂无账号，请点击"添加账号"按钮添加
+                </div>
+            </div>
+        </div>
+
+        <!-- 签到日志 -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold mb-4">签到日志</h2>
+            <div class="space-y-2 max-h-96 overflow-y-auto">
+                <div v-for="log in logs" :key="log.id" class="p-3 border rounded flex justify-between items-center">
+                    <div>
+                        <span class="font-medium">{{ log.account_name }}</span>
+                        <span :class="log.success ? 'text-green-600' : 'text-red-600'" class="ml-2">
+                            {{ log.success ? '✅ 成功' : '❌ 失败' }}
+                        </span>
+                        <span v-if="log.message" class="text-gray-600 ml-2 text-sm">- {{ log.message }}</span>
+                    </div>
+                    <div class="text-sm text-gray-500">{{ formatDate(log.created_at) }}</div>
+                </div>
+                <div v-if="logs.length === 0" class="text-center py-8 text-gray-500">
+                    暂无签到日志
+                </div>
+            </div>
+        </div>
+
+        <!-- 添加/编辑账号模态框 -->
+        <div v-if="showAddAccountModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+                <h3 class="text-xl font-bold mb-4">{{ editingAccount ? '编辑账号' : '添加账号' }}</h3>
+                <form @submit.prevent="saveAccount">
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">账号名称</label>
+                        <input v-model="accountForm.name" type="text" required
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="例如：主账号">
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">用户名/邮箱</label>
+                        <input v-model="accountForm.username" type="text" required
+                               :disabled="editingAccount !== null"
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="your@email.com">
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">密码</label>
+                        <input v-model="accountForm.password" type="password" :required="!editingAccount"
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               :placeholder="editingAccount ? '留空表示不修改' : '请输入密码'">
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">平台</label>
+                        <select v-model="accountForm.provider"
+                                class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="anyrouter">AnyRouter</option>
+                            <option value="agentrouter">AgentRouter</option>
+                        </select>
+                    </div>
+                    <div class="flex gap-4">
+                        <button type="button" @click="testLogin" :disabled="isTesting"
+                                class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded transition disabled:opacity-50">
+                            {{ isTesting ? '测试中...' : '🧪 测试登录' }}
+                        </button>
+                        <button type="submit" :disabled="isSaving"
+                                class="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded transition disabled:opacity-50">
+                            {{ isSaving ? '保存中...' : '💾 保存' }}
+                        </button>
+                        <button type="button" @click="closeModal"
+                                class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded transition">
+                            取消
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 提示消息 -->
+        <div v-if="message.show"
+             :class="message.type === 'success' ? 'bg-green-500' : 'bg-red-500'"
+             class="fixed bottom-4 right-4 text-white px-6 py-3 rounded-lg shadow-lg z-50">
+            {{ message.text }}
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    accounts: [],
+                    logs: [],
+                    statistics: {},
+                    showAddAccountModal: false,
+                    editingAccount: null,
+                    accountForm: {
+                        name: '',
+                        username: '',
+                        password: '',
+                        provider: 'anyrouter'
+                    },
+                    message: {
+                        show: false,
+                        text: '',
+                        type: 'success'
+                    },
+                    isSaving: false,
+                    isTesting: false,
+                    isCheckingIn: false
+                }
+            },
+            mounted() {
+                this.loadData();
+            },
+            methods: {
+                async loadData() {
+                    await Promise.all([
+                        this.loadAccounts(),
+                        this.loadLogs(),
+                        this.loadStatistics()
+                    ]);
+                },
+                async loadAccounts() {
+                    try {
+                        const response = await axios.get('/api/accounts');
+                        this.accounts = response.data.data;
+                    } catch (error) {
+                        this.showMessage('加载账号列表失败', 'error');
+                    }
+                },
+                async loadLogs() {
+                    try {
+                        const response = await axios.get('/api/logs?limit=50');
+                        this.logs = response.data.data;
+                    } catch (error) {
+                        this.showMessage('加载日志失败', 'error');
+                    }
+                },
+                async loadStatistics() {
+                    try {
+                        const response = await axios.get('/api/statistics');
+                        this.statistics = response.data.data;
+                    } catch (error) {
+                        this.showMessage('加载统计信息失败', 'error');
+                    }
+                },
+                async saveAccount() {
+                    this.isSaving = true;
+                    try {
+                        if (this.editingAccount) {
+                            // 更新账号
+                            const updateData = { name: this.accountForm.name };
+                            if (this.accountForm.password) {
+                                updateData.password = this.accountForm.password;
+                            }
+                            await axios.put(`/api/accounts/${this.editingAccount.id}`, updateData);
+                            this.showMessage('账号更新成功', 'success');
+                        } else {
+                            // 添加账号
+                            await axios.post('/api/accounts', this.accountForm);
+                            this.showMessage('账号添加成功', 'success');
+                        }
+                        this.closeModal();
+                        this.loadData();
+                    } catch (error) {
+                        this.showMessage(error.response?.data?.detail || '操作失败', 'error');
+                    } finally {
+                        this.isSaving = false;
+                    }
+                },
+                async testLogin() {
+                    if (!this.accountForm.username || !this.accountForm.password) {
+                        this.showMessage('请填写用户名和密码', 'error');
+                        return;
+                    }
+                    this.isTesting = true;
+                    try {
+                        const response = await axios.post('/api/test-login', {
+                            username: this.accountForm.username,
+                            password: this.accountForm.password
+                        });
+                        this.showMessage('登录测试成功！', 'success');
+                    } catch (error) {
+                        this.showMessage(error.response?.data?.detail || '登录测试失败', 'error');
+                    } finally {
+                        this.isTesting = false;
+                    }
+                },
+                async deleteAccount(id) {
+                    if (!confirm('确定要删除这个账号吗？')) return;
+                    try {
+                        await axios.delete(`/api/accounts/${id}`);
+                        this.showMessage('账号删除成功', 'success');
+                        this.loadData();
+                    } catch (error) {
+                        this.showMessage('删除失败', 'error');
+                    }
+                },
+                async toggleAccount(account) {
+                    try {
+                        await axios.put(`/api/accounts/${account.id}`, {
+                            enabled: !account.enabled
+                        });
+                        this.showMessage(`账号已${account.enabled ? '禁用' : '启用'}`, 'success');
+                        this.loadData();
+                    } catch (error) {
+                        this.showMessage('操作失败', 'error');
+                    }
+                },
+                async checkinAccount(id) {
+                    try {
+                        const response = await axios.post(`/api/checkin/${id}`);
+                        this.showMessage('签到成功！', 'success');
+                        this.loadData();
+                    } catch (error) {
+                        this.showMessage(error.response?.data?.detail || '签到失败', 'error');
+                    }
+                },
+                async checkinAll() {
+                    if (!confirm('确定要对所有启用的账号进行签到吗？')) return;
+                    this.isCheckingIn = true;
+                    try {
+                        const response = await axios.post('/api/checkin-all');
+                        this.showMessage(response.data.message, 'success');
+                        this.loadData();
+                    } catch (error) {
+                        this.showMessage('批量签到失败', 'error');
+                    } finally {
+                        this.isCheckingIn = false;
+                    }
+                },
+                editAccount(account) {
+                    this.editingAccount = account;
+                    this.accountForm = {
+                        name: account.name,
+                        username: account.username,
+                        password: '',
+                        provider: account.provider
+                    };
+                    this.showAddAccountModal = true;
+                },
+                closeModal() {
+                    this.showAddAccountModal = false;
+                    this.editingAccount = null;
+                    this.accountForm = {
+                        name: '',
+                        username: '',
+                        password: '',
+                        provider: 'anyrouter'
+                    };
+                },
+                async loadAccountBalance(id) {
+                    try {
+                        const response = await axios.get(`/api/accounts/${id}`);
+                        const balance = response.data.data.balance;
+                        if (balance) {
+                            alert(`当前余额: $${balance.quota}\n已使用: $${balance.used_quota}`);
+                        } else {
+                            alert('暂无余额记录');
+                        }
+                    } catch (error) {
+                        this.showMessage('加载余额失败', 'error');
+                    }
+                },
+                showMessage(text, type = 'success') {
+                    this.message = { show: true, text, type };
+                    setTimeout(() => {
+                        this.message.show = false;
+                    }, 3000);
+                },
+                formatDate(dateString) {
+                    const date = new Date(dateString);
+                    return date.toLocaleString('zh-CN');
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

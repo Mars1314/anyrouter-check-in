@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  anyrouter-checkin:
+    build: .
+    container_name: anyrouter-checkin
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      # 通知配置（可选）
+      - EMAIL_USER=${EMAIL_USER:-}
+      - EMAIL_PASS=${EMAIL_PASS:-}
+      - EMAIL_TO=${EMAIL_TO:-}
+      - CUSTOM_SMTP_SERVER=${CUSTOM_SMTP_SERVER:-}
+      - DINGDING_WEBHOOK=${DINGDING_WEBHOOK:-}
+      - FEISHU_WEBHOOK=${FEISHU_WEBHOOK:-}
+      - WEIXIN_WEBHOOK=${WEIXIN_WEBHOOK:-}
+      - PUSHPLUS_TOKEN=${PUSHPLUS_TOKEN:-}
+      - SERVERPUSHKEY=${SERVERPUSHKEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    networks:
+      - anyrouter-network
+
+networks:
+  anyrouter-network:
+    driver: bridge

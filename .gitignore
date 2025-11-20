@@ -5,3 +5,10 @@ __pycache__
 .pytest_cache
 .ruff_cache
 balance_hash.txt
+
+# Server data
+data/
+*.db
+*.db-journal
+logs/
+*.log

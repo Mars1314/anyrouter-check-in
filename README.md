@@ -15,7 +15,61 @@
 - ✅ 多种机器人通知（可选）
 - ✅ 绕过 WAF 限制
 
-## 使用方法
+## 🆕 新版本：服务器版 Web 管理系统
+
+现在支持两种使用方式：
+
+### 📱 方式一：服务器版（推荐，更简单）
+
+**特性：**
+- 🌐 Web 可视化管理界面
+- 🔐 用户名密码自动登录（无需手动获取 cookies）
+- 📊 实时余额和签到历史
+- ⏰ 自动定时签到
+- 🐳 Docker 一键部署
+
+**快速开始：**
+```bash
+# 1. 克隆项目
+git clone https://github.com/your/anyrouter-check-in.git
+cd anyrouter-check-in
+
+# 2. 启动服务
+docker-compose up -d
+
+# 3. 访问 http://your-server-ip:8080
+# 4. 在 Web 界面添加账号（输入用户名密码即可）
+```
+
+**本地开发：**
+```bash
+# 安装依赖
+uv sync
+uv run playwright install chromium
+
+# 启动服务
+uv run python web/api.py
+```
+
+📖 **详细文档：**
+- [服务器部署指南](README_SERVER.md)
+- [快速开始](QUICKSTART_SERVER.md)
+- [本地开发指南](LOCAL_GUIDE.md)
+
+---
+
+### 📋 方式二：GitHub Actions 版（原版，免费）
+
+**特性：**
+- ✅ 完全免费，使用 GitHub Actions
+- ✅ 无需自己的服务器
+- ✅ 自动定时执行
+
+**使用方法：**
+
+继续往下看原有的配置方法 ↓
+
+## 使用方法（GitHub Actions 版）
 
 ### 1. Fork 本仓库
 
