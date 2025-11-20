@@ -23,10 +23,12 @@
 
 **特性：**
 - 🌐 Web 可视化管理界面
-- 🔐 用户名密码自动登录（无需手动获取 cookies）
+- 🔐 **双认证模式**：支持用户名密码或 Cookies 认证
+- 🤖 自动登录（密码模式下无需手动获取 cookies）
 - 📊 实时余额和签到历史
-- ⏰ 自动定时签到
+- ⏰ 自动定时签到（每 6 小时）
 - 🐳 Docker 一键部署
+- 🔒 数据加密存储
 
 **快速开始：**
 ```bash
@@ -38,8 +40,20 @@ cd anyrouter-check-in
 docker-compose up -d
 
 # 3. 访问 http://your-server-ip:8080
-# 4. 在 Web 界面添加账号（输入用户名密码即可）
+# 4. 在 Web 界面添加账号
 ```
+
+**两种添加账号方式：**
+
+🔑 **方式 A：用户名密码（推荐）**
+- 直接输入 AnyRouter 用户名和密码
+- 系统自动登录获取所需信息
+- Cookie 永不过期，自动刷新
+
+🍪 **方式 B：Cookies + API User**
+- 适合无法提供密码的场景
+- 需手动从浏览器获取 Cookies
+- 详见 [Cookies 获取指南](COOKIES_GUIDE.md)
 
 **本地开发：**
 ```bash
@@ -55,6 +69,8 @@ uv run python web/api.py
 - [服务器部署指南](README_SERVER.md)
 - [快速开始](QUICKSTART_SERVER.md)
 - [本地开发指南](LOCAL_GUIDE.md)
+- [双认证模式说明](DUAL_AUTH.md)
+- [Cookies 获取指南](COOKIES_GUIDE.md)
 
 ---
 

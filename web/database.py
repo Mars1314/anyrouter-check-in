@@ -75,8 +75,11 @@ class Database:
                 CREATE TABLE IF NOT EXISTS accounts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
-                    username TEXT NOT NULL UNIQUE,
-                    password TEXT NOT NULL,
+                    username TEXT,
+                    password TEXT,
+                    cookies TEXT,
+                    api_user TEXT,
+                    auth_type TEXT DEFAULT 'password',
                     provider TEXT DEFAULT 'anyrouter',
                     enabled INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -84,6 +87,17 @@ class Database:
                 )
             '''
 			)
+
+			# 检查并添加新字段（用于数据库升级）
+			try:
+				cursor.execute("SELECT cookies FROM accounts LIMIT 1")
+			except Exception:
+				# 字段不存在，添加新字段
+				cursor.execute("ALTER TABLE accounts ADD COLUMN cookies TEXT")
+				cursor.execute("ALTER TABLE accounts ADD COLUMN api_user TEXT")
+				cursor.execute("ALTER TABLE accounts ADD COLUMN auth_type TEXT DEFAULT 'password'")
+				# 将 username 和 password 改为可空
+				print('[DATABASE] Migrated database schema to support both auth types')
 
 			# 签到记录表
 			cursor.execute(
@@ -119,18 +133,49 @@ class Database:
 
 	# ========== 账号管理 ==========
 
-	def add_account(self, name: str, username: str, password: str, provider: str = 'anyrouter') -> int:
-		"""添加账号"""
-		encrypted_password = self._encrypt(password)
+	def add_account(
+		self,
+		name: str,
+		username: str = None,
+		password: str = None,
+		cookies: str = None,
+		api_user: str = None,
+		provider: str = 'anyrouter',
+	) -> int:
+		"""添加账号 - 支持两种认证方式"""
 		with self.get_connection() as conn:
 			cursor = conn.cursor()
-			cursor.execute(
-				'''
-                INSERT INTO accounts (name, username, password, provider)
-                VALUES (?, ?, ?, ?)
-            ''',
-				(name, username, encrypted_password, provider),
-			)
+
+			# 判断认证类型
+			if username and password:
+				# 方式1: 用户名密码
+				auth_type = 'password'
+				encrypted_password = self._encrypt(password)
+				cursor.execute(
+					'''
+                    INSERT INTO accounts (name, username, password, auth_type, provider)
+                    VALUES (?, ?, ?, ?, ?)
+                ''',
+					(name, username, encrypted_password, auth_type, provider),
+				)
+			elif cookies and api_user:
+				# 方式2: Cookies + API User
+				auth_type = 'cookies'
+				# 确保 cookies 是字符串格式
+				if isinstance(cookies, dict):
+					import json
+					cookies = json.dumps(cookies)
+				encrypted_cookies = self._encrypt(cookies)
+				cursor.execute(
+					'''
+                    INSERT INTO accounts (name, cookies, api_user, auth_type, provider)
+                    VALUES (?, ?, ?, ?, ?)
+                ''',
+					(name, encrypted_cookies, api_user, auth_type, provider),
+				)
+			else:
+				raise ValueError('必须提供用户名密码或 cookies+api_user')
+
 			return cursor.lastrowid
 
 	def update_account(self, account_id: int, name: str = None, password: str = None, enabled: bool = None):
@@ -171,7 +216,11 @@ class Database:
 			row = cursor.fetchone()
 			if row:
 				account = dict(row)
-				account['password'] = self._decrypt(account['password'])
+				# 根据认证类型解密对应字段
+				if account.get('auth_type') == 'password' and account.get('password'):
+					account['password'] = self._decrypt(account['password'])
+				elif account.get('auth_type') == 'cookies' and account.get('cookies'):
+					account['cookies'] = self._decrypt(account['cookies'])
 				return account
 			return None
 
@@ -187,7 +236,11 @@ class Database:
 			accounts = []
 			for row in cursor.fetchall():
 				account = dict(row)
-				account['password'] = self._decrypt(account['password'])
+				# 根据认证类型解密对应字段
+				if account.get('auth_type') == 'password' and account.get('password'):
+					account['password'] = self._decrypt(account['password'])
+				elif account.get('auth_type') == 'cookies' and account.get('cookies'):
+					account['cookies'] = self._decrypt(account['cookies'])
 				accounts.append(account)
 			return accounts
 
@@ -303,15 +356,20 @@ class Database:
 			)
 			today_stats = dict(cursor.fetchone())
 
-			# 总余额
+			# 总余额 - 获取每个账号的最新余额
 			cursor.execute(
 				'''
-                SELECT SUM(bh.quota) as total_quota, SUM(bh.used_quota) as total_used
+                SELECT SUM(quota) as total_quota, SUM(used_quota) as total_used
                 FROM (
-                    SELECT DISTINCT ON (account_id) account_id, quota, used_quota
-                    FROM balance_history
-                    ORDER BY account_id, created_at DESC
-                ) bh
+                    SELECT account_id, quota, used_quota
+                    FROM balance_history bh1
+                    WHERE created_at = (
+                        SELECT MAX(created_at)
+                        FROM balance_history bh2
+                        WHERE bh2.account_id = bh1.account_id
+                    )
+                    GROUP BY account_id
+                )
             '''
 			)
 			balance_stats = dict(cursor.fetchone())

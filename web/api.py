@@ -42,8 +42,10 @@ app.add_middleware(
 
 class AccountCreate(BaseModel):
 	name: str
-	username: str
-	password: str
+	username: str | None = None
+	password: str | None = None
+	cookies: str | None = None
+	api_user: str | None = None
 	provider: str = 'anyrouter'
 
 
@@ -118,10 +120,36 @@ async def get_account(account_id: int):
 
 @app.post('/api/accounts')
 async def create_account(account: AccountCreate):
-	"""添加新账号"""
+	"""添加新账号 - 支持两种认证方式"""
 	try:
-		account_id = db.add_account(account.name, account.username, account.password, account.provider)
-		return {'success': True, 'data': {'id': account_id}, 'message': '账号添加成功'}
+		# 验证：必须提供用户名密码 或 cookies+api_user
+		has_password_auth = account.username and account.password
+		has_cookies_auth = account.cookies and account.api_user
+
+		if not has_password_auth and not has_cookies_auth:
+			raise HTTPException(
+				status_code=400,
+				detail='请提供用户名密码或 Cookies+API User'
+			)
+
+		# 调用数据库添加账号
+		account_id = db.add_account(
+			name=account.name,
+			username=account.username,
+			password=account.password,
+			cookies=account.cookies,
+			api_user=account.api_user,
+			provider=account.provider
+		)
+
+		auth_type = '密码认证' if has_password_auth else 'Cookies认证'
+		return {
+			'success': True,
+			'data': {'id': account_id, 'auth_type': auth_type},
+			'message': f'账号添加成功 ({auth_type})'
+		}
+	except HTTPException:
+		raise
 	except Exception as e:
 		if 'UNIQUE constraint failed' in str(e):
 			raise HTTPException(status_code=400, detail='用户名已存在')
@@ -242,15 +270,25 @@ async def manual_checkin(account_id: int):
 		from checkin import check_in_account
 		from utils.config import AccountConfig, AppConfig
 
-		# 先自动登录获取 cookies
-		login_result = await login_anyrouter(account['username'], account['password'])
-		if not login_result or not login_result.get('success'):
-			db.add_checkin_log(account_id, False, '自动登录失败')
-			raise HTTPException(status_code=400, detail='自动登录失败')
+		# 根据认证类型获取 cookies 和 api_user
+		if account.get('auth_type') == 'password':
+			# 密码认证：自动登录获取 cookies
+			login_result = await login_anyrouter(account['username'], account['password'])
+			if not login_result or not login_result.get('success'):
+				db.add_checkin_log(account_id, False, '自动登录失败')
+				raise HTTPException(status_code=400, detail='自动登录失败')
+
+			cookies = login_result['cookies']
+			api_user = login_result['api_user']
+		else:
+			# Cookies认证：直接使用保存的 cookies 和 api_user
+			import json
+			cookies = json.loads(account['cookies']) if isinstance(account['cookies'], str) else account['cookies']
+			api_user = account['api_user']
 
 		# 构造账号配置
 		account_config = AccountConfig(
-			cookies=login_result['cookies'], api_user=login_result['api_user'], provider=account['provider'], name=account['name']
+			cookies=cookies, api_user=api_user, provider=account['provider'], name=account['name']
 		)
 
 		app_config = AppConfig.load_from_env()

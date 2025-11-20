@@ -45,25 +45,35 @@ async def auto_checkin_task():
 
 	for account in accounts:
 		try:
-			print(f'\n[SCHEDULER] 处理账号: {account["name"]} ({account["username"]})')
+			print(f'\n[SCHEDULER] 处理账号: {account["name"]}')
 
-			# 自动登录获取 cookies
-			print(f'[SCHEDULER] 正在登录账号: {account["name"]}')
-			login_result = await login_anyrouter(account['username'], account['password'])
+			# 根据认证类型获取 cookies 和 api_user
+			if account.get('auth_type') == 'password':
+				# 密码认证：自动登录获取 cookies
+				print(f'[SCHEDULER] 正在登录账号: {account["name"]} (密码认证)')
+				login_result = await login_anyrouter(account['username'], account['password'])
 
-			if not login_result or not login_result.get('success'):
-				error_msg = '自动登录失败'
-				print(f'[SCHEDULER] ❌ {account["name"]}: {error_msg}')
-				db.add_checkin_log(account['id'], False, error_msg)
-				failed_accounts.append({'name': account['name'], 'error': error_msg})
-				continue
+				if not login_result or not login_result.get('success'):
+					error_msg = '自动登录失败'
+					print(f'[SCHEDULER] ❌ {account["name"]}: {error_msg}')
+					db.add_checkin_log(account['id'], False, error_msg)
+					failed_accounts.append({'name': account['name'], 'error': error_msg})
+					continue
 
-			print(f'[SCHEDULER] ✅ {account["name"]}: 登录成功，开始签到')
+				print(f'[SCHEDULER] ✅ {account["name"]}: 登录成功，开始签到')
+				cookies = login_result['cookies']
+				api_user = login_result['api_user']
+			else:
+				# Cookies认证：直接使用保存的 cookies 和 api_user
+				print(f'[SCHEDULER] 使用已保存的 Cookies: {account["name"]} (Cookies认证)')
+				import json
+				cookies = json.loads(account['cookies']) if isinstance(account['cookies'], str) else account['cookies']
+				api_user = account['api_user']
 
 			# 构造账号配置
 			account_config = AccountConfig(
-				cookies=login_result['cookies'],
-				api_user=login_result['api_user'],
+				cookies=cookies,
+				api_user=api_user,
 				provider=account['provider'],
 				name=account['name'],
 			)
