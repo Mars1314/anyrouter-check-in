@@ -37,36 +37,50 @@ async def auto_checkin_task():
 		print('[SCHEDULER] 没有启用的账号，跳过签到任务')
 		return
 
-	print(f'[SCHEDULER] 找到 {len(accounts)} 个启用的账号')
+	# 过滤掉过期用户的账号
+	valid_accounts = []
+	for account in accounts:
+		if db.check_user_expired(account['user_id']):
+			print(f'[SCHEDULER] 跳过过期用户的账号: {account["name"]} (user_id: {account["user_id"]})')
+			continue
+		valid_accounts.append(account)
+
+	if not valid_accounts:
+		print('[SCHEDULER] 没有有效的账号（所有用户都已过期），跳过签到任务')
+		return
+
+	print(f'[SCHEDULER] 找到 {len(valid_accounts)} 个有效账号（过滤掉 {len(accounts) - len(valid_accounts)} 个过期账号）')
 
 	app_config = AppConfig.load_from_env()
 	success_count = 0
 	failed_accounts = []
 
-	for account in accounts:
+	for account in valid_accounts:
 		try:
 			print(f'\n[SCHEDULER] 处理账号: {account["name"]}')
 
 			# 根据认证类型获取 cookies 和 api_user
+			import json
+			cookies = None
+			api_user = None
+			need_login = False
+
 			if account.get('auth_type') == 'password':
-				# 密码认证：自动登录获取 cookies
-				print(f'[SCHEDULER] 正在登录账号: {account["name"]} (密码认证)')
-				login_result = await login_anyrouter(account['username'], account['password'])
-
-				if not login_result or not login_result.get('success'):
-					error_msg = '自动登录失败'
-					print(f'[SCHEDULER] ❌ {account["name"]}: {error_msg}')
-					db.add_checkin_log(account['id'], False, error_msg)
-					failed_accounts.append({'name': account['name'], 'error': error_msg})
-					continue
-
-				print(f'[SCHEDULER] ✅ {account["name"]}: 登录成功，开始签到')
-				cookies = login_result['cookies']
-				api_user = login_result['api_user']
+				# 密码认证：优先使用已保存的 cookies，失效时才重新登录
+				if account.get('cookies') and account.get('api_user'):
+					# 尝试使用已保存的 cookies
+					try:
+						cookies = json.loads(account['cookies']) if isinstance(account['cookies'], str) else account['cookies']
+						api_user = account['api_user']
+						print(f'[SCHEDULER] 使用已保存的 Cookies: {account["name"]} (密码认证)')
+					except:
+						need_login = True
+				else:
+					# 第一次登录，没有保存的 cookies
+					need_login = True
 			else:
 				# Cookies认证：直接使用保存的 cookies 和 api_user
 				print(f'[SCHEDULER] 使用已保存的 Cookies: {account["name"]} (Cookies认证)')
-				import json
 				cookies = json.loads(account['cookies']) if isinstance(account['cookies'], str) else account['cookies']
 				api_user = account['api_user']
 
@@ -80,6 +94,44 @@ async def auto_checkin_task():
 
 			# 执行签到
 			success, user_info = await check_in_account(account_config, 0, app_config)
+
+			# 如果签到失败且是密码认证，可能是 cookies 过期，尝试重新登录
+			if not success and account.get('auth_type') == 'password' and not need_login:
+				print(f'[SCHEDULER] Cookies 可能已过期，尝试重新登录账号: {account["name"]}')
+				need_login = True
+
+			# 需要登录的情况：重新登录并保存 cookies
+			if need_login:
+				print(f'[SCHEDULER] 正在登录账号: {account["name"]} (密码认证)')
+				login_result = await login_anyrouter(account['username'], account['password'])
+
+				if not login_result or not login_result.get('success'):
+					error_msg = '自动登录失败'
+					print(f'[SCHEDULER] ❌ {account["name"]}: {error_msg}')
+					db.add_checkin_log(account['id'], False, error_msg)
+					failed_accounts.append({'name': account['name'], 'error': error_msg})
+					continue
+
+				print(f'[SCHEDULER] ✅ {account["name"]}: 登录成功')
+				cookies = login_result['cookies']
+				api_user = login_result['api_user']
+
+				# 保存新的 cookies 和 api_user 到数据库
+				db.update_account(
+					account['id'],
+					cookies=json.dumps(cookies) if isinstance(cookies, dict) else cookies,
+					api_user=api_user
+				)
+				print(f'[SCHEDULER] 已更新账号 {account["name"]} 的 cookies 和 api_user')
+
+				# 使用新的 cookies 重新签到
+				account_config = AccountConfig(
+					cookies=cookies,
+					api_user=api_user,
+					provider=account['provider'],
+					name=account['name'],
+				)
+				success, user_info = await check_in_account(account_config, 0, app_config)
 
 			# 记录日志
 			if success:

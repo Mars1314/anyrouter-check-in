@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户管理 - AnyRouter 签到管理系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="app">
+        <!-- 顶部导航栏 -->
+        <nav class="bg-white shadow-md mb-6">
+            <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+                <div class="flex items-center gap-4">
+                    <h1 class="text-2xl font-bold text-gray-800">🤖 AnyRouter 签到管理</h1>
+                    <div class="flex gap-2">
+                        <a href="/dashboard" class="px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg">账号管理</a>
+                        <a href="/users" class="px-4 py-2 text-blue-600 bg-blue-50 rounded-lg font-medium">用户管理</a>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="text-right">
+                        <div class="text-sm text-gray-600">{{ currentUser?.display_name || currentUser?.username }}</div>
+                        <div class="text-xs text-gray-400">管理员</div>
+                    </div>
+                    <button @click="logout" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition text-sm">
+                        退出登录
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container mx-auto px-4 py-4">
+            <!-- 操作按钮 -->
+            <div class="bg-white rounded-lg shadow-md p-4 mb-6 flex gap-4">
+                <button @click="showAddUserModal = true" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg transition">
+                    ➕ 添加用户
+                </button>
+                <button @click="loadUsers" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition">
+                    🔃 刷新列表
+                </button>
+            </div>
+
+            <!-- 用户列表 -->
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h2 class="text-xl font-bold mb-4">用户列表</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead>
+                            <tr class="border-b">
+                                <th class="text-left py-3 px-4">ID</th>
+                                <th class="text-left py-3 px-4">用户名</th>
+                                <th class="text-left py-3 px-4">显示名称</th>
+                                <th class="text-left py-3 px-4">角色</th>
+                                <th class="text-left py-3 px-4">有效期</th>
+                                <th class="text-left py-3 px-4">状态</th>
+                                <th class="text-left py-3 px-4">创建时间</th>
+                                <th class="text-left py-3 px-4">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="user in users" :key="user.id" class="border-b hover:bg-gray-50">
+                                <td class="py-3 px-4">{{ user.id }}</td>
+                                <td class="py-3 px-4 font-medium">{{ user.username }}</td>
+                                <td class="py-3 px-4">{{ user.display_name }}</td>
+                                <td class="py-3 px-4">
+                                    <span :class="user.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'"
+                                          class="px-2 py-1 rounded text-sm">
+                                        {{ user.role === 'admin' ? '👑 管理员' : '👤 普通用户' }}
+                                    </span>
+                                </td>
+                                <td class="py-3 px-4">
+                                    <span v-if="user.expire_date" :class="isExpired(user.expire_date) ? 'text-red-600' : 'text-gray-600'" class="text-sm">
+                                        {{ user.expire_date }}
+                                        <span v-if="isExpired(user.expire_date)" class="ml-1">⏰已过期</span>
+                                    </span>
+                                    <span v-else class="text-gray-400 text-sm">永久有效</span>
+                                </td>
+                                <td class="py-3 px-4">
+                                    <span :class="user.enabled ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'"
+                                          class="px-2 py-1 rounded text-sm">
+                                        {{ user.enabled ? '✅ 已启用' : '❌ 已禁用' }}
+                                    </span>
+                                </td>
+                                <td class="py-3 px-4 text-sm text-gray-600">{{ formatDate(user.created_at) }}</td>
+                                <td class="py-3 px-4">
+                                    <div class="flex gap-2">
+                                        <button @click="editUser(user)" class="text-blue-600 hover:underline text-sm">
+                                            编辑
+                                        </button>
+                                        <button @click="toggleUser(user)" class="text-yellow-600 hover:underline text-sm">
+                                            {{ user.enabled ? '禁用' : '启用' }}
+                                        </button>
+                                        <button v-if="user.role !== 'admin'" @click="deleteUser(user.id)" class="text-red-600 hover:underline text-sm">
+                                            删除
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div v-if="users.length === 0" class="text-center py-8 text-gray-500">
+                        暂无用户数据
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 添加/编辑用户模态框 -->
+        <div v-if="showAddUserModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+                <h3 class="text-xl font-bold mb-4">{{ editingUser ? '编辑用户' : '添加用户' }}</h3>
+
+                <form @submit.prevent="saveUser">
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">用户名</label>
+                        <input v-model="userForm.username" type="text" required
+                               :disabled="editingUser !== null"
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                               placeholder="登录用户名">
+                        <p v-if="editingUser" class="text-xs text-gray-500 mt-1">用户名不可修改</p>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">显示名称</label>
+                        <input v-model="userForm.display_name" type="text" required
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="显示名称">
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">密码</label>
+                        <input v-model="userForm.password" type="text" :required="!editingUser"
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               :placeholder="editingUser ? '留空则不修改' : '请输入密码'">
+                        <p v-if="editingUser" class="text-xs text-gray-500 mt-1">留空则不修改密码</p>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">角色</label>
+                        <select v-model="userForm.role"
+                                class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="user">普通用户</option>
+                            <option value="admin">管理员</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">有效期</label>
+                        <input v-model="userForm.expire_date" type="date"
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="留空表示永久有效">
+                        <p class="text-xs text-gray-500 mt-1">留空表示永久有效</p>
+                    </div>
+
+                    <div class="flex gap-4">
+                        <button type="submit" :disabled="isSaving"
+                                class="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded transition disabled:opacity-50">
+                            {{ isSaving ? '保存中...' : '💾 保存' }}
+                        </button>
+                        <button type="button" @click="closeModal"
+                                class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded transition">
+                            取消
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 提示消息 -->
+        <div v-if="message.show"
+             :class="message.type === 'success' ? 'bg-green-500' : 'bg-red-500'"
+             class="fixed bottom-4 right-4 text-white px-6 py-3 rounded-lg shadow-lg z-50">
+            {{ message.text }}
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        // 配置 axios 拦截器，自动添加 token
+        axios.interceptors.request.use(config => {
+            const token = localStorage.getItem('token');
+            if (token) {
+                config.headers.Authorization = `Bearer ${token}`;
+            }
+            return config;
+        }, error => {
+            return Promise.reject(error);
+        });
+
+        // 响应拦截器：处理401错误
+        axios.interceptors.response.use(response => {
+            return response;
+        }, error => {
+            if (error.response && error.response.status === 401) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                window.location.href = '/';
+            } else if (error.response && error.response.status === 403) {
+                alert('权限不足：仅管理员可访问此页面');
+                window.location.href = '/dashboard';
+            }
+            return Promise.reject(error);
+        });
+
+        createApp({
+            data() {
+                return {
+                    currentUser: null,
+                    users: [],
+                    showAddUserModal: false,
+                    editingUser: null,
+                    userForm: {
+                        username: '',
+                        display_name: '',
+                        password: '',
+                        role: 'user',
+                        expire_date: ''
+                    },
+                    message: {
+                        show: false,
+                        text: '',
+                        type: 'success'
+                    },
+                    isSaving: false
+                }
+            },
+            mounted() {
+                // 检查登录状态和管理员权限
+                const token = localStorage.getItem('token');
+                const userStr = localStorage.getItem('user');
+
+                if (!token || !userStr) {
+                    window.location.href = '/';
+                    return;
+                }
+
+                this.currentUser = JSON.parse(userStr);
+
+                // 检查是否是管理员
+                if (this.currentUser.role !== 'admin') {
+                    alert('权限不足：仅管理员可访问此页面');
+                    window.location.href = '/dashboard';
+                    return;
+                }
+
+                this.loadUsers();
+            },
+            methods: {
+                logout() {
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('user');
+                    window.location.href = '/';
+                },
+                async loadUsers() {
+                    try {
+                        const response = await axios.get('/api/users');
+                        this.users = response.data.data;
+                    } catch (error) {
+                        this.showMessage('加载用户列表失败', 'error');
+                    }
+                },
+                async saveUser() {
+                    this.isSaving = true;
+                    try {
+                        if (this.editingUser) {
+                            // 更新用户
+                            const updateData = {
+                                display_name: this.userForm.display_name,
+                                role: this.userForm.role,
+                                expire_date: this.userForm.expire_date || null
+                            };
+
+                            // 只在填写了密码时才更新
+                            if (this.userForm.password) {
+                                updateData.password = this.userForm.password;
+                            }
+
+                            await axios.put(`/api/users/${this.editingUser.id}`, updateData);
+                            this.showMessage('用户更新成功', 'success');
+                        } else {
+                            // 添加用户
+                            await axios.post('/api/users', {
+                                username: this.userForm.username,
+                                display_name: this.userForm.display_name,
+                                password: this.userForm.password,
+                                role: this.userForm.role,
+                                expire_date: this.userForm.expire_date || null
+                            });
+                            this.showMessage('用户添加成功', 'success');
+                        }
+                        this.closeModal();
+                        this.loadUsers();
+                    } catch (error) {
+                        this.showMessage(error.response?.data?.detail || '操作失败', 'error');
+                    } finally {
+                        this.isSaving = false;
+                    }
+                },
+                async deleteUser(id) {
+                    if (!confirm('确定要删除这个用户吗？删除后该用户的所有账号数据也会被删除！')) return;
+                    try {
+                        await axios.delete(`/api/users/${id}`);
+                        this.showMessage('用户删除成功', 'success');
+                        this.loadUsers();
+                    } catch (error) {
+                        this.showMessage(error.response?.data?.detail || '删除失败', 'error');
+                    }
+                },
+                async toggleUser(user) {
+                    try {
+                        await axios.put(`/api/users/${user.id}`, {
+                            enabled: !user.enabled
+                        });
+                        this.showMessage(`用户已${user.enabled ? '禁用' : '启用'}`, 'success');
+                        this.loadUsers();
+                    } catch (error) {
+                        this.showMessage('操作失败', 'error');
+                    }
+                },
+                editUser(user) {
+                    this.editingUser = user;
+                    this.userForm = {
+                        username: user.username,
+                        display_name: user.display_name,
+                        password: '',
+                        role: user.role,
+                        expire_date: user.expire_date || ''
+                    };
+                    this.showAddUserModal = true;
+                },
+                closeModal() {
+                    this.showAddUserModal = false;
+                    this.editingUser = null;
+                    this.userForm = {
+                        username: '',
+                        display_name: '',
+                        password: '',
+                        role: 'user',
+                        expire_date: ''
+                    };
+                },
+                isExpired(expireDate) {
+                    if (!expireDate) return false;
+                    const today = new Date().toISOString().split('T')[0];
+                    return expireDate < today;
+                },
+                showMessage(text, type = 'success') {
+                    this.message = { show: true, text, type };
+                    setTimeout(() => {
+                        this.message.show = false;
+                    }, 3000);
+                },
+                formatDate(dateString) {
+                    if (!dateString) return '';
+                    const date = new Date(dateString + ' UTC');
+                    return date.toLocaleString('zh-CN', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false
+                    });
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

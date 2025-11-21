@@ -69,6 +69,38 @@ class Database:
 		with self.get_connection() as conn:
 			cursor = conn.cursor()
 
+			# 用户表（新增）
+			cursor.execute(
+				'''
+				CREATE TABLE IF NOT EXISTS users (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					username TEXT UNIQUE NOT NULL,
+					password TEXT NOT NULL,
+					role TEXT DEFAULT 'user',
+					display_name TEXT NOT NULL,
+					expire_date DATE,
+					enabled INTEGER DEFAULT 1,
+					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+				)
+				'''
+			)
+
+			# 检查并创建默认超管账号
+			cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+			admin_count = cursor.fetchone()[0]
+			if admin_count == 0:
+				# 创建默认超管：admin / admin123
+				default_password = self._encrypt('admin123')
+				cursor.execute(
+					'''
+					INSERT INTO users (username, password, role, display_name, enabled)
+					VALUES (?, ?, 'admin', '超级管理员', 1)
+					''',
+					('admin', default_password),
+				)
+				print('[DATABASE] Created default admin user: admin / admin123')
+
 			# 账号表
 			cursor.execute(
 				'''
@@ -155,6 +187,27 @@ class Database:
 			except Exception as e:
 				print(f'[DATABASE] Migration check: {e}')
 
+			# 添加 user_id 字段到 accounts 表（多租户支持）
+			try:
+				cursor.execute("SELECT user_id FROM accounts LIMIT 1")
+			except Exception:
+				# user_id 字段不存在，需要添加
+				print('[DATABASE] Migrating accounts table to add user_id field...')
+
+				# 获取默认超管ID
+				cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1")
+				admin_user = cursor.fetchone()
+				if admin_user:
+					admin_id = admin_user[0]
+					# 添加字段，默认值为超管ID
+					cursor.execute(f"ALTER TABLE accounts ADD COLUMN user_id INTEGER DEFAULT {admin_id}")
+					print(f'[DATABASE] Added user_id field, existing accounts assigned to admin (ID: {admin_id})')
+				else:
+					# 如果没有超管，添加可空字段
+					cursor.execute("ALTER TABLE accounts ADD COLUMN user_id INTEGER")
+					print('[DATABASE] Added user_id field (nullable)')
+
+
 			# 签到记录表
 			cursor.execute(
 				'''
@@ -187,10 +240,116 @@ class Database:
 			cursor.execute('CREATE INDEX IF NOT EXISTS idx_checkin_logs_account ON checkin_logs(account_id)')
 			cursor.execute('CREATE INDEX IF NOT EXISTS idx_balance_history_account ON balance_history(account_id)')
 
+	# ========== 用户管理 ==========
+
+	def add_user(self, username: str, password: str, display_name: str, role: str = 'user', expire_date: str = None) -> int:
+		"""添加用户"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			encrypted_password = self._encrypt(password)
+			cursor.execute(
+				'''
+				INSERT INTO users (username, password, role, display_name, expire_date)
+				VALUES (?, ?, ?, ?, ?)
+				''',
+				(username, encrypted_password, role, display_name, expire_date),
+			)
+			return cursor.lastrowid
+
+	def get_user_by_username(self, username: str):
+		"""根据用户名获取用户"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+			row = cursor.fetchone()
+			if row:
+				user = dict(row)
+				# 解密密码
+				user['password'] = self._decrypt(user['password'])
+				return user
+			return None
+
+	def get_user_by_id(self, user_id: int):
+		"""根据ID获取用户"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+			row = cursor.fetchone()
+			if row:
+				user = dict(row)
+				# 不返回密码
+				user.pop('password', None)
+				return user
+			return None
+
+	def get_all_users(self):
+		"""获取所有用户"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			cursor.execute('SELECT * FROM users ORDER BY id')
+			rows = cursor.fetchall()
+			users = []
+			for row in rows:
+				user = dict(row)
+				# 不返回密码
+				user.pop('password', None)
+				users.append(user)
+			return users
+
+	def update_user(self, user_id: int, display_name: str = None, password: str = None, expire_date: str = None, enabled: bool = None):
+		"""更新用户信息"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			updates = []
+			params = []
+
+			if display_name is not None:
+				updates.append('display_name = ?')
+				params.append(display_name)
+
+			if password is not None:
+				updates.append('password = ?')
+				params.append(self._encrypt(password))
+
+			if expire_date is not None:
+				updates.append('expire_date = ?')
+				params.append(expire_date)
+
+			if enabled is not None:
+				updates.append('enabled = ?')
+				params.append(1 if enabled else 0)
+
+			if updates:
+				updates.append('updated_at = CURRENT_TIMESTAMP')
+				params.append(user_id)
+				cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
+
+	def delete_user(self, user_id: int):
+		"""删除用户（会级联删除该用户的所有账号）"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
+
+	def check_user_expired(self, user_id: int) -> bool:
+		"""检查用户是否过期"""
+		user = self.get_user_by_id(user_id)
+		if not user:
+			return True
+		if not user.get('enabled'):
+			return True
+		if user.get('expire_date'):
+			from datetime import datetime
+			expire_date = datetime.strptime(user['expire_date'], '%Y-%m-%d').date()
+			today = datetime.now().date()
+			if today > expire_date:
+				return True
+		return False
+
 	# ========== 账号管理 ==========
 
 	def add_account(
 		self,
+		user_id: int,
 		name: str,
 		username: str = None,
 		password: str = None,
@@ -209,10 +368,10 @@ class Database:
 				encrypted_password = self._encrypt(password)
 				cursor.execute(
 					'''
-                    INSERT INTO accounts (name, username, password, auth_type, provider)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO accounts (user_id, name, username, password, auth_type, provider)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 ''',
-					(name, username, encrypted_password, auth_type, provider),
+					(user_id, name, username, encrypted_password, auth_type, provider),
 				)
 			elif cookies and api_user:
 				# 方式2: Cookies + API User
@@ -224,18 +383,18 @@ class Database:
 				encrypted_cookies = self._encrypt(cookies)
 				cursor.execute(
 					'''
-                    INSERT INTO accounts (name, cookies, api_user, auth_type, provider)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO accounts (user_id, name, cookies, api_user, auth_type, provider)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 ''',
-					(name, encrypted_cookies, api_user, auth_type, provider),
+					(user_id, name, encrypted_cookies, api_user, auth_type, provider),
 				)
 			else:
 				raise ValueError('必须提供用户名密码或 cookies+api_user')
 
 			return cursor.lastrowid
 
-	def update_account(self, account_id: int, name: str = None, password: str = None, enabled: bool = None):
-		"""更新账号信息"""
+	def update_account(self, account_id: int, name: str = None, password: str = None, cookies: str = None, api_user: str = None, provider: str = None, enabled: bool = None):
+		"""更新账号信息 - 支持两种认证方式"""
 		with self.get_connection() as conn:
 			cursor = conn.cursor()
 			updates = []
@@ -245,9 +404,27 @@ class Database:
 				updates.append('name = ?')
 				params.append(name)
 
+			# 密码认证：更新密码
 			if password is not None:
 				updates.append('password = ?')
 				params.append(self._encrypt(password))
+
+			# Cookies 认证：更新 cookies 和 api_user
+			if cookies is not None:
+				# 确保 cookies 是字符串格式
+				if isinstance(cookies, dict):
+					import json
+					cookies = json.dumps(cookies)
+				updates.append('cookies = ?')
+				params.append(self._encrypt(cookies))
+
+			if api_user is not None:
+				updates.append('api_user = ?')
+				params.append(api_user)
+
+			if provider is not None:
+				updates.append('provider = ?')
+				params.append(provider)
 
 			if enabled is not None:
 				updates.append('enabled = ?')
@@ -280,14 +457,24 @@ class Database:
 				return account
 			return None
 
-	def get_all_accounts(self, enabled_only: bool = False) -> List[dict]:
-		"""获取所有账号"""
+	def get_all_accounts(self, user_id: int = None, enabled_only: bool = False) -> List[dict]:
+		"""获取所有账号 - 支持按用户筛选"""
 		with self.get_connection() as conn:
 			cursor = conn.cursor()
+
+			sql = 'SELECT * FROM accounts WHERE 1=1'
+			params = []
+
+			if user_id is not None:
+				sql += ' AND user_id = ?'
+				params.append(user_id)
+
 			if enabled_only:
-				cursor.execute('SELECT * FROM accounts WHERE enabled = 1 ORDER BY id')
-			else:
-				cursor.execute('SELECT * FROM accounts ORDER BY id')
+				sql += ' AND enabled = 1'
+
+			sql += ' ORDER BY id'
+
+			cursor.execute(sql, params)
 
 			accounts = []
 			for row in cursor.fetchall():
@@ -314,34 +501,30 @@ class Database:
 				(account_id, 1 if success else 0, message),
 			)
 
-	def get_checkin_logs(self, account_id: int = None, limit: int = 100) -> List[dict]:
-		"""获取签到日志"""
+	def get_checkin_logs(self, account_id: int = None, user_id: int = None, limit: int = 100) -> List[dict]:
+		"""获取签到日志 - 支持按账号或用户筛选"""
 		with self.get_connection() as conn:
 			cursor = conn.cursor()
-			if account_id:
-				cursor.execute(
-					'''
-                    SELECT cl.*, a.name as account_name
-                    FROM checkin_logs cl
-                    JOIN accounts a ON cl.account_id = a.id
-                    WHERE cl.account_id = ?
-                    ORDER BY cl.created_at DESC
-                    LIMIT ?
-                ''',
-					(account_id, limit),
-				)
-			else:
-				cursor.execute(
-					'''
-                    SELECT cl.*, a.name as account_name
-                    FROM checkin_logs cl
-                    JOIN accounts a ON cl.account_id = a.id
-                    ORDER BY cl.created_at DESC
-                    LIMIT ?
-                ''',
-					(limit,),
-				)
 
+			sql = '''
+				SELECT cl.*, a.name as account_name
+				FROM checkin_logs cl
+				JOIN accounts a ON cl.account_id = a.id
+				WHERE 1=1
+			'''
+			params = []
+
+			if account_id:
+				sql += ' AND cl.account_id = ?'
+				params.append(account_id)
+			elif user_id:
+				sql += ' AND a.user_id = ?'
+				params.append(user_id)
+
+			sql += ' ORDER BY cl.created_at DESC LIMIT ?'
+			params.append(limit)
+
+			cursor.execute(sql, params)
 			return [dict(row) for row in cursor.fetchall()]
 
 	# ========== 余额历史 ==========
@@ -393,41 +576,86 @@ class Database:
 
 	# ========== 统计信息 ==========
 
-	def get_statistics(self) -> dict:
-		"""获取统计信息"""
+	def get_statistics(self, user_id: int = None) -> dict:
+		"""获取统计信息 - 支持按用户筛选"""
 		with self.get_connection() as conn:
 			cursor = conn.cursor()
 
+			# 构建WHERE条件
+			where_clause = 'WHERE a.user_id = ?' if user_id else ''
+			params = [user_id] if user_id else []
+
 			# 总账号数
-			cursor.execute('SELECT COUNT(*) as total, SUM(enabled) as enabled FROM accounts')
+			if user_id:
+				cursor.execute('SELECT COUNT(*) as total, SUM(enabled) as enabled FROM accounts WHERE user_id = ?', (user_id,))
+			else:
+				cursor.execute('SELECT COUNT(*) as total, SUM(enabled) as enabled FROM accounts')
 			account_stats = dict(cursor.fetchone())
 
 			# 今日签到统计
-			cursor.execute(
-				'''
-                SELECT COUNT(*) as total, SUM(success) as success
-                FROM checkin_logs
-                WHERE DATE(created_at) = DATE('now')
-            '''
-			)
+			if user_id:
+				cursor.execute(
+					'''
+					SELECT COUNT(*) as total, SUM(cl.success) as success
+					FROM checkin_logs cl
+					JOIN accounts a ON cl.account_id = a.id
+					WHERE DATE(cl.created_at) = DATE('now') AND a.user_id = ?
+					''',
+					(user_id,)
+				)
+			else:
+				cursor.execute(
+					'''
+					SELECT COUNT(*) as total, SUM(success) as success
+					FROM checkin_logs
+					WHERE DATE(created_at) = DATE('now')
+					'''
+				)
 			today_stats = dict(cursor.fetchone())
 
-			# 总余额 - 获取每个账号的最新余额
-			cursor.execute(
-				'''
-                SELECT SUM(quota) as total_quota, SUM(used_quota) as total_used
-                FROM (
-                    SELECT account_id, quota, used_quota
-                    FROM balance_history bh1
-                    WHERE created_at = (
-                        SELECT MAX(created_at)
-                        FROM balance_history bh2
-                        WHERE bh2.account_id = bh1.account_id
-                    )
-                    GROUP BY account_id
-                )
-            '''
-			)
+			# 总余额 - 获取每个账号的最新余额（只统计启用的、未过期用户的账号）
+			if user_id:
+				cursor.execute(
+					'''
+					SELECT SUM(quota) as total_quota, SUM(used_quota) as total_used
+					FROM (
+						SELECT bh.account_id, bh.quota, bh.used_quota
+						FROM balance_history bh
+						JOIN accounts a ON bh.account_id = a.id
+						JOIN users u ON a.user_id = u.id
+						WHERE a.user_id = ?
+							AND a.enabled = 1
+							AND (u.enabled = 1 AND (u.expire_date IS NULL OR u.expire_date >= DATE('now')))
+							AND bh.created_at = (
+								SELECT MAX(created_at)
+								FROM balance_history bh2
+								WHERE bh2.account_id = bh.account_id
+							)
+						GROUP BY bh.account_id
+					)
+					''',
+					(user_id,)
+				)
+			else:
+				cursor.execute(
+					'''
+					SELECT SUM(quota) as total_quota, SUM(used_quota) as total_used
+					FROM (
+						SELECT bh.account_id, bh.quota, bh.used_quota
+						FROM balance_history bh
+						JOIN accounts a ON bh.account_id = a.id
+						JOIN users u ON a.user_id = u.id
+						WHERE a.enabled = 1
+							AND (u.enabled = 1 AND (u.expire_date IS NULL OR u.expire_date >= DATE('now')))
+							AND bh.created_at = (
+								SELECT MAX(created_at)
+								FROM balance_history bh2
+								WHERE bh2.account_id = bh.account_id
+							)
+						GROUP BY bh.account_id
+					)
+					'''
+				)
 			balance_stats = dict(cursor.fetchone())
 
 			return {

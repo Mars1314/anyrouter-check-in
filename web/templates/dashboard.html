@@ -10,45 +10,62 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="bg-gray-100">
-    <div id="app" class="container mx-auto px-4 py-8">
-        <!-- 头部 -->
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h1 class="text-3xl font-bold text-gray-800 mb-2">🤖 AnyRouter 签到管理系统</h1>
-            <p class="text-gray-600">自动化管理多账号签到，轻松获取每日奖励</p>
-        </div>
+    <div id="app">
+        <!-- 顶部导航栏 -->
+        <nav class="bg-white shadow-md mb-6">
+            <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+                <div class="flex items-center gap-4">
+                    <h1 class="text-2xl font-bold text-gray-800">🤖 AnyRouter 签到管理</h1>
+                    <div class="flex gap-2">
+                        <a href="/dashboard" class="px-4 py-2 text-blue-600 bg-blue-50 rounded-lg font-medium">账号管理</a>
+                        <a v-if="currentUser && currentUser.role === 'admin'" href="/users" class="px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg">用户管理</a>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="text-right">
+                        <div class="text-sm text-gray-600">{{ currentUser?.display_name || currentUser?.username }}</div>
+                        <div class="text-xs text-gray-400">{{ currentUser?.role === 'admin' ? '管理员' : '普通用户' }}</div>
+                    </div>
+                    <button @click="logout" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition text-sm">
+                        退出登录
+                    </button>
+                </div>
+            </div>
+        </nav>
 
-        <!-- 统计卡片 -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="text-gray-500 text-sm">总账号数</div>
-                <div class="text-3xl font-bold text-blue-600">{{ statistics.total_accounts }}</div>
+        <div class="container mx-auto px-4 py-4">
+            <!-- 统计卡片 -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="text-gray-500 text-sm">总账号数</div>
+                    <div class="text-3xl font-bold text-blue-600">{{ statistics.total_accounts }}</div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="text-gray-500 text-sm">已启用账号</div>
+                    <div class="text-3xl font-bold text-green-600">{{ statistics.enabled_accounts }}</div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="text-gray-500 text-sm">今日签到成功</div>
+                    <div class="text-3xl font-bold text-purple-600">{{ statistics.today_checkin_success }}</div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="text-gray-500 text-sm">总余额</div>
+                    <div class="text-3xl font-bold text-orange-600">${{ statistics.total_quota?.toFixed(2) || 0 }}</div>
+                </div>
             </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="text-gray-500 text-sm">已启用账号</div>
-                <div class="text-3xl font-bold text-green-600">{{ statistics.enabled_accounts }}</div>
-            </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="text-gray-500 text-sm">今日签到成功</div>
-                <div class="text-3xl font-bold text-purple-600">{{ statistics.today_checkin_success }}</div>
-            </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="text-gray-500 text-sm">总余额</div>
-                <div class="text-3xl font-bold text-orange-600">${{ statistics.total_quota?.toFixed(2) || 0 }}</div>
-            </div>
-        </div>
 
-        <!-- 操作按钮 -->
-        <div class="bg-white rounded-lg shadow-md p-4 mb-6 flex gap-4">
-            <button @click="showAddAccountModal = true" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg transition">
-                ➕ 添加账号
-            </button>
-            <button @click="checkinAll" :disabled="isCheckingIn" class="bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-lg transition disabled:opacity-50">
-                {{ isCheckingIn ? '签到中...' : '🔄 全部签到' }}
-            </button>
-            <button @click="loadAccounts" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition">
-                🔃 刷新数据
-            </button>
-        </div>
+            <!-- 操作按钮 -->
+            <div class="bg-white rounded-lg shadow-md p-4 mb-6 flex gap-4">
+                <button @click="showAddAccountModal = true" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg transition">
+                    ➕ 添加账号
+                </button>
+                <button @click="checkinAll" :disabled="isCheckingIn" class="bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-lg transition disabled:opacity-50">
+                    {{ isCheckingIn ? '签到中...' : '🔄 全部签到' }}
+                </button>
+                <button @click="loadAccounts" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition">
+                    🔃 刷新数据
+                </button>
+            </div>
 
         <!-- 账号列表 -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
@@ -96,6 +113,9 @@
                                 <div class="flex gap-2">
                                     <button @click="checkinAccount(account.id)" class="text-green-600 hover:underline text-sm">
                                         签到
+                                    </button>
+                                    <button @click="viewCredentials(account)" class="text-purple-600 hover:underline text-sm">
+                                        查看凭据
                                     </button>
                                     <button @click="editAccount(account)" class="text-blue-600 hover:underline text-sm">
                                         编辑
@@ -243,6 +263,76 @@
             </div>
         </div>
 
+        <!-- 查看凭据模态框 -->
+        <div v-if="showCredentialsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                <h3 class="text-xl font-bold mb-4">账号凭据信息</h3>
+
+                <div class="space-y-4">
+                    <div class="p-3 bg-gray-100 rounded">
+                        <div class="text-sm text-gray-600 mb-1">账号名称</div>
+                        <div class="font-medium">{{ credentialsData.name }}</div>
+                    </div>
+
+                    <div class="p-3 bg-gray-100 rounded">
+                        <div class="text-sm text-gray-600 mb-1">认证方式</div>
+                        <div class="font-medium">
+                            <span :class="credentialsData.auth_type === 'password' ? 'text-blue-600' : 'text-purple-600'">
+                                {{ credentialsData.auth_type === 'password' ? '🔑 密码认证' : '🍪 Cookies 认证' }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="p-3 bg-gray-100 rounded">
+                        <div class="text-sm text-gray-600 mb-1">平台</div>
+                        <div class="font-medium">{{ credentialsData.provider }}</div>
+                    </div>
+
+                    <div v-if="credentialsData.username" class="p-3 bg-gray-100 rounded">
+                        <div class="text-sm text-gray-600 mb-1">用户名</div>
+                        <div class="font-medium font-mono">{{ credentialsData.username }}</div>
+                    </div>
+
+                    <div v-if="credentialsData.api_user" class="p-3 bg-blue-50 rounded border border-blue-200">
+                        <div class="flex justify-between items-center mb-2">
+                            <div class="text-sm font-semibold text-gray-700">API User (明文)</div>
+                            <button @click="copyToClipboard(credentialsData.api_user, 'API User')"
+                                    class="text-blue-600 hover:text-blue-700 text-sm font-medium">
+                                📋 复制
+                            </button>
+                        </div>
+                        <div class="font-mono text-sm bg-white p-3 rounded break-all border border-blue-100">
+                            {{ credentialsData.api_user }}
+                        </div>
+                    </div>
+
+                    <div v-if="credentialsData.cookies" class="p-3 bg-purple-50 rounded border border-purple-200">
+                        <div class="flex justify-between items-center mb-2">
+                            <div class="text-sm font-semibold text-gray-700">Cookies (JSON 明文)</div>
+                            <button @click="copyToClipboard(credentialsData.cookies, 'Cookies')"
+                                    class="text-purple-600 hover:text-purple-700 text-sm font-medium">
+                                📋 复制
+                            </button>
+                        </div>
+                        <div class="font-mono text-xs bg-white p-3 rounded break-all max-h-64 overflow-y-auto border border-purple-100 whitespace-pre-wrap">{{ formatCookiesDisplay(credentialsData.cookies) }}</div>
+                    </div>
+
+                    <div class="p-3 bg-yellow-50 rounded border border-yellow-200">
+                        <div class="text-xs text-yellow-800">
+                            ⚠️ 这些凭据信息非常敏感，请妥善保管，不要泄露给他人
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-6">
+                    <button @click="showCredentialsModal = false"
+                            class="w-full bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded transition">
+                        关闭
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- 提示消息 -->
         <div v-if="message.show"
              :class="message.type === 'success' ? 'bg-green-500' : 'bg-red-500'"
@@ -254,13 +344,40 @@
     <script>
         const { createApp } = Vue;
 
+        // 配置 axios 拦截器，自动添加 token
+        axios.interceptors.request.use(config => {
+            const token = localStorage.getItem('token');
+            if (token) {
+                config.headers.Authorization = `Bearer ${token}`;
+            }
+            return config;
+        }, error => {
+            return Promise.reject(error);
+        });
+
+        // 响应拦截器：处理401错误
+        axios.interceptors.response.use(response => {
+            return response;
+        }, error => {
+            if (error.response && error.response.status === 401) {
+                // Token 过期或无效，跳转到登录页
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                window.location.href = '/';
+            }
+            return Promise.reject(error);
+        });
+
         createApp({
             data() {
                 return {
+                    currentUser: null,  // 当前登录用户
                     accounts: [],
                     logs: [],
                     statistics: {},
                     showAddAccountModal: false,
+                    showCredentialsModal: false,
+                    credentialsData: {},
                     editingAccount: null,
                     authType: 'password', // 'password' 或 'cookies'
                     accountForm: {
@@ -282,9 +399,24 @@
                 }
             },
             mounted() {
+                // 检查登录状态
+                const token = localStorage.getItem('token');
+                const userStr = localStorage.getItem('user');
+
+                if (!token || !userStr) {
+                    window.location.href = '/';
+                    return;
+                }
+
+                this.currentUser = JSON.parse(userStr);
                 this.loadData();
             },
             methods: {
+                logout() {
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('user');
+                    window.location.href = '/';
+                },
                 async loadData() {
                     await Promise.all([
                         this.loadAccounts(),
@@ -321,7 +453,10 @@
                     try {
                         if (this.editingAccount) {
                             // 更新账号
-                            const updateData = { name: this.accountForm.name };
+                            const updateData = {
+                                name: this.accountForm.name,
+                                provider: this.accountForm.provider
+                            };
 
                             if (this.authType === 'password') {
                                 // 密码认证：更新密码（编辑时必填）
@@ -477,6 +612,49 @@
                         this.showMessage('加载账号信息失败', 'error');
                     }
                 },
+                async viewCredentials(account) {
+                    try {
+                        // 获取账号完整信息（包含敏感数据）
+                        const response = await axios.get(`/api/accounts/${account.id}?include_sensitive=true`);
+                        const fullAccount = response.data.data.account;
+
+                        this.credentialsData = {
+                            name: fullAccount.name,
+                            auth_type: fullAccount.auth_type || 'password',
+                            provider: fullAccount.provider,
+                            username: fullAccount.username || '',
+                            api_user: fullAccount.api_user || '',
+                            cookies: fullAccount.cookies || ''
+                        };
+                        this.showCredentialsModal = true;
+                    } catch (error) {
+                        this.showMessage('加载凭据信息失败', 'error');
+                    }
+                },
+                copyToClipboard(text, label) {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).then(() => {
+                            this.showMessage(`${label} 已复制到剪贴板`, 'success');
+                        }).catch(() => {
+                            this.showMessage('复制失败，请手动复制', 'error');
+                        });
+                    } else {
+                        // 降级方案：使用 textarea
+                        const textarea = document.createElement('textarea');
+                        textarea.value = text;
+                        textarea.style.position = 'fixed';
+                        textarea.style.opacity = '0';
+                        document.body.appendChild(textarea);
+                        textarea.select();
+                        try {
+                            document.execCommand('copy');
+                            this.showMessage(`${label} 已复制到剪贴板`, 'success');
+                        } catch (err) {
+                            this.showMessage('复制失败，请手动复制', 'error');
+                        }
+                        document.body.removeChild(textarea);
+                    }
+                },
                 closeModal() {
                     this.showAddAccountModal = false;
                     this.editingAccount = null;
@@ -508,6 +686,17 @@
                     setTimeout(() => {
                         this.message.show = false;
                     }, 3000);
+                },
+                formatCookiesDisplay(cookies) {
+                    if (!cookies) return '';
+                    try {
+                        // 尝试解析为 JSON 并格式化
+                        const parsed = typeof cookies === 'string' ? JSON.parse(cookies) : cookies;
+                        return JSON.stringify(parsed, null, 2);
+                    } catch (e) {
+                        // 如果不是有效的 JSON，直接返回原文
+                        return cookies;
+                    }
                 },
                 formatDate(dateString) {
                     if (!dateString) return '';
