@@ -86,9 +86,11 @@ uv run ruff format .
 - Some providers auto-complete check-in on user info request (set `sign_in_path: None`)
 
 **Notification Logic**:
-- Only notifies when: (1) any account fails, (2) balance changes detected, or (3) first run
-- Includes detailed account status and balance information
+- Global notifications: Only sent when (1) any account fails, (2) balance changes detected, or (3) first run
+- Per-account email notifications: If an account has `email` configured, it receives individual notifications after every check-in (regardless of success/failure)
+- Global notifications include detailed account status and balance information
 - Attempts all configured notification methods independently
+- Per-account emails require only `EMAIL_USER` and `EMAIL_PASS` to be configured (no `EMAIL_TO` needed)
 
 ### GitHub Actions Workflow
 
@@ -120,13 +122,15 @@ JSON array of account objects:
     "name": "账号显示名称",
     "provider": "anyrouter",
     "cookies": {"session": "cookie_value"},
-    "api_user": "12345"
+    "api_user": "12345",
+    "email": "user@example.com"
   }
 ]
 ```
 - `cookies` and `api_user` are required
 - `provider` defaults to "anyrouter" if not specified
 - `name` is optional for display purposes
+- `email` is optional - if provided, the user will receive individual email notifications for each check-in (success or failure)
 
 ### PROVIDERS (optional)
 JSON object defining custom providers:

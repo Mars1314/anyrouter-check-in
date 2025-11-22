@@ -61,13 +61,15 @@ jobs:
         echo "缓存未命中，开始安装 Playwright 浏览器..."
         uv run playwright install chromium --with-deps
 
-    - name: 恢复余额历史缓存
+    - name: 恢复余额历史和 WAF cookies 缓存
       uses: actions/cache@v4
       with:
-        path: balance_hash.txt
-        key: balance-hash-${{ github.sha }}
+        path: |
+          balance_hash.txt
+          waf_cookies_cache.json
+        key: checkin-cache-${{ github.sha }}
         restore-keys: |
-          balance-hash-
+          checkin-cache-
 
     - name: 执行签到
       env:

@@ -8,10 +8,11 @@ import httpx
 
 class NotificationKit:
 	def __init__(self):
-		self.email_user: str = os.getenv('EMAIL_USER', '')
-		self.email_pass: str = os.getenv('EMAIL_PASS', '')
+		# 优先从数据库读取配置，fallback 到环境变量
+		self.email_user: str = self._get_config('email_user') or os.getenv('EMAIL_USER', '')
+		self.email_pass: str = self._get_config('email_pass') or os.getenv('EMAIL_PASS', '')
 		self.email_to: str = os.getenv('EMAIL_TO', '')
-		self.smtp_server: str = os.getenv('CUSTOM_SMTP_SERVER', '')
+		self.smtp_server: str = self._get_config('custom_smtp_server') or os.getenv('CUSTOM_SMTP_SERVER', '')
 		self.pushplus_token = os.getenv('PUSHPLUS_TOKEN')
 		self.server_push_key = os.getenv('SERVERPUSHKEY')
 		self.dingding_webhook = os.getenv('DINGDING_WEBHOOK')
@@ -19,6 +20,18 @@ class NotificationKit:
 		self.weixin_webhook = os.getenv('WEIXIN_WEBHOOK')
 		self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
 		self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
+	def _get_config(self, key: str) -> str | None:
+		"""从数据库获取配置（如果可用）"""
+		try:
+			# 动态导入避免循环依赖
+			from web.database import db
+			value = db.get_config(key)
+			return value
+		except Exception as e:
+			# 如果数据库不可用（比如在 GitHub Actions 环境），返回 None
+			print(f'[WARN] Failed to get config "{key}" from database: {e}')
+			return None
 
 	def send_email(self, title: str, content: str, msg_type: Literal['text', 'html'] = 'text'):
 		if not self.email_user or not self.email_pass or not self.email_to:
@@ -32,9 +45,69 @@ class NotificationKit:
 		msg['Subject'] = title
 
 		smtp_server = self.smtp_server if self.smtp_server else f'smtp.{self.email_user.split("@")[1]}'
-		with smtplib.SMTP_SSL(smtp_server, 465) as server:
+
+		# 尝试 SSL 连接，失败则尝试 STARTTLS
+		import ssl
+		server = None
+		try:
+			context = ssl.create_default_context()
+			server = smtplib.SMTP_SSL(smtp_server, 465, timeout=10, context=context)
 			server.login(self.email_user, self.email_pass)
 			server.send_message(msg)
+			server.quit()
+		except Exception:
+			# 如果 SSL 失败，尝试 STARTTLS (587端口)
+			if server:
+				try:
+					server.quit()
+				except Exception:
+					pass
+			server = smtplib.SMTP(smtp_server, 587, timeout=10)
+			server.starttls()
+			server.login(self.email_user, self.email_pass)
+			server.send_message(msg)
+			server.quit()
+
+	def send_email_to(
+		self, to_email: str, title: str, content: str, msg_type: Literal['text', 'html'] = 'text'
+	):
+		"""发送邮件到指定邮箱（用于单个账号通知）"""
+		if not self.email_user or not self.email_pass:
+			raise ValueError('Email configuration (EMAIL_USER and EMAIL_PASS) not set')
+
+		if not to_email:
+			raise ValueError('Recipient email address not provided')
+
+		# MIMEText 需要 'plain' 或 'html'，而不是 'text'
+		mime_subtype = 'plain' if msg_type == 'text' else 'html'
+		msg = MIMEText(content, mime_subtype, 'utf-8')
+		msg['From'] = f'AnyRouter Assistant <{self.email_user}>'
+		msg['To'] = to_email
+		msg['Subject'] = title
+
+		smtp_server = self.smtp_server if self.smtp_server else f'smtp.{self.email_user.split("@")[1]}'
+
+		# 尝试 SSL 连接，失败则尝试 STARTTLS
+		import ssl
+		server = None
+		try:
+			context = ssl.create_default_context()
+			server = smtplib.SMTP_SSL(smtp_server, 465, timeout=10, context=context)
+			server.login(self.email_user, self.email_pass)
+			server.send_message(msg)
+			server.quit()
+		except Exception:
+			# 如果 SSL 失败，尝试 STARTTLS (587端口)
+			if server:
+				try:
+					server.quit()
+				except Exception:
+					pass
+			server = smtplib.SMTP(smtp_server, 587, timeout=10)
+			server.starttls()
+			server.login(self.email_user, self.email_pass)
+			server.send_message(msg)
+			server.quit()
 
 	def send_pushplus(self, title: str, content: str):
 		if not self.pushplus_token:

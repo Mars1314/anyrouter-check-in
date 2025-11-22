@@ -207,6 +207,27 @@ class Database:
 					cursor.execute("ALTER TABLE accounts ADD COLUMN user_id INTEGER")
 					print('[DATABASE] Added user_id field (nullable)')
 
+			# 添加 email 字段到 accounts 表（个人邮件通知支持）
+			try:
+				cursor.execute("SELECT email FROM accounts LIMIT 1")
+			except Exception:
+				# email 字段不存在，需要添加
+				print('[DATABASE] Migrating accounts table to add email field...')
+				cursor.execute("ALTER TABLE accounts ADD COLUMN email TEXT")
+				print('[DATABASE] Added email field for per-account notifications')
+
+			# 系统配置表
+			cursor.execute(
+				'''
+				CREATE TABLE IF NOT EXISTS system_config (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					config_key TEXT UNIQUE NOT NULL,
+					config_value TEXT,
+					description TEXT,
+					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+				)
+				'''
+			)
 
 			# 签到记录表
 			cursor.execute(
@@ -356,6 +377,7 @@ class Database:
 		cookies: str = None,
 		api_user: str = None,
 		provider: str = 'anyrouter',
+		email: str = None,
 	) -> int:
 		"""添加账号 - 支持两种认证方式"""
 		with self.get_connection() as conn:
@@ -368,10 +390,10 @@ class Database:
 				encrypted_password = self._encrypt(password)
 				cursor.execute(
 					'''
-                    INSERT INTO accounts (user_id, name, username, password, auth_type, provider)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO accounts (user_id, name, username, password, auth_type, provider, email)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''',
-					(user_id, name, username, encrypted_password, auth_type, provider),
+					(user_id, name, username, encrypted_password, auth_type, provider, email),
 				)
 			elif cookies and api_user:
 				# 方式2: Cookies + API User
@@ -383,17 +405,17 @@ class Database:
 				encrypted_cookies = self._encrypt(cookies)
 				cursor.execute(
 					'''
-                    INSERT INTO accounts (user_id, name, cookies, api_user, auth_type, provider)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO accounts (user_id, name, cookies, api_user, auth_type, provider, email)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''',
-					(user_id, name, encrypted_cookies, api_user, auth_type, provider),
+					(user_id, name, encrypted_cookies, api_user, auth_type, provider, email),
 				)
 			else:
 				raise ValueError('必须提供用户名密码或 cookies+api_user')
 
 			return cursor.lastrowid
 
-	def update_account(self, account_id: int, name: str = None, password: str = None, cookies: str = None, api_user: str = None, provider: str = None, enabled: bool = None):
+	def update_account(self, account_id: int, name: str = None, password: str = None, cookies: str = None, api_user: str = None, provider: str = None, enabled: bool = None, email: str = None):
 		"""更新账号信息 - 支持两种认证方式"""
 		with self.get_connection() as conn:
 			cursor = conn.cursor()
@@ -430,6 +452,11 @@ class Database:
 				updates.append('enabled = ?')
 				params.append(1 if enabled else 0)
 
+			# 更新邮箱（允许设置为空）
+			if email is not None:
+				updates.append('email = ?')
+				params.append(email if email else None)
+
 			if updates:
 				updates.append('updated_at = CURRENT_TIMESTAMP')
 				params.append(account_id)
@@ -449,10 +476,10 @@ class Database:
 			row = cursor.fetchone()
 			if row:
 				account = dict(row)
-				# 根据认证类型解密对应字段
-				if account.get('auth_type') == 'password' and account.get('password'):
+				# 解密敏感字段
+				if account.get('password'):
 					account['password'] = self._decrypt(account['password'])
-				elif account.get('auth_type') == 'cookies' and account.get('cookies'):
+				if account.get('cookies'):
 					account['cookies'] = self._decrypt(account['cookies'])
 				return account
 			return None
@@ -479,10 +506,10 @@ class Database:
 			accounts = []
 			for row in cursor.fetchall():
 				account = dict(row)
-				# 根据认证类型解密对应字段
-				if account.get('auth_type') == 'password' and account.get('password'):
+				# 解密敏感字段
+				if account.get('password'):
 					account['password'] = self._decrypt(account['password'])
-				elif account.get('auth_type') == 'cookies' and account.get('cookies'):
+				if account.get('cookies'):
 					account['cookies'] = self._decrypt(account['cookies'])
 				accounts.append(account)
 			return accounts
@@ -573,6 +600,45 @@ class Database:
 
 			row = cursor.fetchone()
 			return dict(row) if row else None
+
+	# ========== 系统配置 ==========
+
+	def get_config(self, key: str) -> str | None:
+		"""获取配置值"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			cursor.execute('SELECT config_value FROM system_config WHERE config_key = ?', (key,))
+			row = cursor.fetchone()
+			return row['config_value'] if row else None
+
+	def set_config(self, key: str, value: str, description: str = None):
+		"""设置配置值"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			cursor.execute(
+				'''
+				INSERT INTO system_config (config_key, config_value, description)
+				VALUES (?, ?, ?)
+				ON CONFLICT(config_key) DO UPDATE SET
+					config_value = excluded.config_value,
+					description = excluded.description,
+					updated_at = CURRENT_TIMESTAMP
+				''',
+				(key, value, description),
+			)
+
+	def get_all_configs(self) -> dict:
+		"""获取所有配置"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			cursor.execute('SELECT config_key, config_value FROM system_config')
+			return {row['config_key']: row['config_value'] for row in cursor.fetchall()}
+
+	def delete_config(self, key: str):
+		"""删除配置"""
+		with self.get_connection() as conn:
+			cursor = conn.cursor()
+			cursor.execute('DELETE FROM system_config WHERE config_key = ?', (key,))
 
 	# ========== 统计信息 ==========
 

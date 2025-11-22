@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统设置 - AnyRouter 签到管理</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="app">
+        <!-- 顶部导航栏 -->
+        <nav class="bg-white shadow-md mb-6">
+            <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+                <div class="flex items-center gap-4">
+                    <h1 class="text-2xl font-bold text-gray-800">🤖 AnyRouter 签到管理</h1>
+                    <div class="flex gap-2">
+                        <a href="/dashboard" class="px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg">账号管理</a>
+                        <a href="/users" class="px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg">用户管理</a>
+                        <a href="/settings" class="px-4 py-2 text-blue-600 bg-blue-50 rounded-lg font-medium">系统设置</a>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="text-right">
+                        <div class="text-sm text-gray-600">{{ currentUser?.display_name || currentUser?.username }}</div>
+                        <div class="text-xs text-gray-400">管理员</div>
+                    </div>
+                    <button @click="logout" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition text-sm">
+                        退出登录
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container mx-auto px-4 py-4 max-w-4xl">
+            <!-- 邮件配置 -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h2 class="text-2xl font-bold mb-6">📧 邮件通知配置</h2>
+                <p class="text-gray-600 mb-6">配置系统邮件发送服务器，用于发送签到通知邮件给用户</p>
+
+                <form @submit.prevent="saveEmailConfig">
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">发件邮箱地址 <span class="text-red-500">*</span></label>
+                        <input v-model="emailConfig.email_user" type="email" required
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="admin@company.com">
+                        <p class="text-xs text-gray-500 mt-1">
+                            用于发送邮件的邮箱地址
+                        </p>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">SMTP 密码/授权码 <span class="text-red-500">*</span></label>
+                        <div class="relative">
+                            <input v-model="emailConfig.email_pass" :type="showPassword ? 'text' : 'password'" required
+                                   class="w-full px-3 py-2 pr-10 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                   placeholder="请输入 SMTP 密码或应用专用密码">
+                            <button type="button" @click="showPassword = !showPassword"
+                                    class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700">
+                                {{ showPassword ? '🙈' : '👁️' }}
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">
+                            SMTP 密码或应用专用密码（Gmail、QQ 邮箱等需要生成应用专用密码）
+                        </p>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">SMTP 服务器地址（可选）</label>
+                        <input v-model="emailConfig.custom_smtp_server" type="text"
+                               class="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="smtp.gmail.com">
+                        <p class="text-xs text-gray-500 mt-1">
+                            留空则自动推断（如 admin@gmail.com → smtp.gmail.com）
+                        </p>
+                    </div>
+
+                    <!-- 常用邮箱配置参考 -->
+                    <div class="mb-6 p-4 bg-blue-50 rounded-lg">
+                        <div class="text-sm font-medium text-blue-900 mb-2">📌 常用邮箱配置参考</div>
+                        <div class="text-xs text-blue-800 space-y-1">
+                            <div><strong>Gmail:</strong> smtp.gmail.com（需启用两步验证并生成应用专用密码）</div>
+                            <div><strong>QQ邮箱:</strong> smtp.qq.com（需获取授权码）</div>
+                            <div><strong>163邮箱:</strong> smtp.163.com（需开启 SMTP 服务）</div>
+                            <div><strong>Outlook:</strong> smtp-mail.outlook.com</div>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4">
+                        <button type="submit" :disabled="isSaving"
+                                class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg transition disabled:opacity-50">
+                            {{ isSaving ? '保存中...' : '💾 保存配置' }}
+                        </button>
+                        <button type="button" @click="testEmailConfig" :disabled="isTesting || !canTest"
+                                class="bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-lg transition disabled:opacity-50">
+                            {{ isTesting ? '测试中...' : '🧪 测试邮件' }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- 配置说明 -->
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h3 class="text-lg font-bold mb-4">💡 使用说明</h3>
+                <div class="space-y-3 text-sm text-gray-700">
+                    <div>
+                        <strong>1. 配置邮件服务器：</strong>
+                        填写上方的发件邮箱和 SMTP 密码后保存
+                    </div>
+                    <div>
+                        <strong>2. 为账号添加邮箱：</strong>
+                        在"账号管理"页面添加或编辑账号时，填写"通知邮箱"字段
+                    </div>
+                    <div>
+                        <strong>3. 自动发送通知：</strong>
+                        每次签到后，系统会自动发送邮件通知到账号配置的邮箱
+                    </div>
+                    <div class="mt-4 p-3 bg-yellow-50 rounded">
+                        <strong>⚠️ 注意事项：</strong>
+                        <ul class="list-disc list-inside mt-2 space-y-1">
+                            <li>Gmail、QQ 等邮箱需要生成应用专用密码，不能直接使用登录密码</li>
+                            <li>配置后请点击"测试邮件"按钮验证配置是否正确</li>
+                            <li>SMTP 密码保存后不会明文显示，修改时留空表示不修改</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 提示消息 -->
+        <div v-if="message.show"
+             :class="message.type === 'success' ? 'bg-green-500' : 'bg-red-500'"
+             class="fixed bottom-4 right-4 text-white px-6 py-3 rounded-lg shadow-lg z-50">
+            {{ message.text }}
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    currentUser: null,
+                    emailConfig: {
+                        email_user: '',
+                        email_pass: '',
+                        custom_smtp_server: ''
+                    },
+                    emailPassConfigured: false,
+                    showPassword: false,
+                    message: {
+                        show: false,
+                        text: '',
+                        type: 'success'
+                    },
+                    isSaving: false,
+                    isTesting: false
+                }
+            },
+            computed: {
+                canTest() {
+                    return this.emailConfig.email_user && (this.emailConfig.email_pass || this.emailPassConfigured);
+                }
+            },
+            mounted() {
+                this.checkAuth();
+                this.loadConfig();
+            },
+            methods: {
+                async checkAuth() {
+                    const token = localStorage.getItem('token');
+                    const userStr = localStorage.getItem('user');
+
+                    if (!token || !userStr) {
+                        window.location.href = '/';
+                        return;
+                    }
+
+                    this.currentUser = JSON.parse(userStr);
+
+                    // 检查是否是管理员
+                    if (this.currentUser.role !== 'admin') {
+                        this.showMessage('只有管理员可以访问系统设置', 'error');
+                        setTimeout(() => window.location.href = '/dashboard', 2000);
+                        return;
+                    }
+
+                    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+                },
+                async loadConfig() {
+                    try {
+                        const response = await axios.get('/api/system-config');
+                        const data = response.data.data;
+                        this.emailConfig.email_user = data.email_user || '';
+                        this.emailConfig.email_pass = data.email_pass || '';
+                        this.emailConfig.custom_smtp_server = data.custom_smtp_server || '';
+                        this.emailPassConfigured = !!data.email_pass;
+                    } catch (error) {
+                        this.showMessage('加载配置失败', 'error');
+                    }
+                },
+                async saveEmailConfig() {
+                    this.isSaving = true;
+                    try {
+                        const payload = {
+                            email_user: this.emailConfig.email_user,
+                            email_pass: this.emailConfig.email_pass || null,
+                            custom_smtp_server: this.emailConfig.custom_smtp_server || null
+                        };
+
+                        await axios.put('/api/system-config', payload);
+                        this.showMessage('配置保存成功', 'success');
+                        this.emailPassConfigured = !!this.emailConfig.email_pass;
+                    } catch (error) {
+                        this.showMessage(error.response?.data?.detail || '保存失败', 'error');
+                    } finally {
+                        this.isSaving = false;
+                    }
+                },
+                async testEmailConfig() {
+                    if (!confirm('将发送测试邮件到配置的发件邮箱，确定继续？')) {
+                        return;
+                    }
+
+                    this.isTesting = true;
+                    try {
+                        // TODO: 需要后端实现测试邮件接口
+                        await axios.post('/api/test-email');
+                        this.showMessage('测试邮件发送成功，请检查收件箱', 'success');
+                    } catch (error) {
+                        this.showMessage(error.response?.data?.detail || '测试邮件发送失败', 'error');
+                    } finally {
+                        this.isTesting = false;
+                    }
+                },
+                logout() {
+                    localStorage.removeItem('token');
+                    window.location.href = '/';
+                },
+                showMessage(text, type = 'success') {
+                    this.message = { show: true, text, type };
+                    setTimeout(() => {
+                        this.message.show = false;
+                    }, 3000);
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

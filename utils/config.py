@@ -119,14 +119,22 @@ class AccountConfig:
 	api_user: str
 	provider: str = 'anyrouter'
 	name: str | None = None
+	email: str | None = None  # 用户邮箱，用于接收签到通知
 
 	@classmethod
 	def from_dict(cls, data: dict, index: int) -> 'AccountConfig':
 		"""从字典创建 AccountConfig"""
 		provider = data.get('provider', 'anyrouter')
 		name = data.get('name', f'Account {index + 1}')
+		email = data.get('email')
 
-		return cls(cookies=data['cookies'], api_user=data['api_user'], provider=provider, name=name if name else None)
+		return cls(
+			cookies=data['cookies'],
+			api_user=data['api_user'],
+			provider=provider,
+			name=name if name else None,
+			email=email,
+		)
 
 	def get_display_name(self, index: int) -> str:
 		"""获取显示名称"""
@@ -134,7 +142,41 @@ class AccountConfig:
 
 
 def load_accounts_config() -> list[AccountConfig] | None:
-	"""从环境变量加载账号配置"""
+	"""加载账号配置（优先从数据库加载，fallback 到环境变量）"""
+	# 尝试从数据库加载
+	try:
+		from web.database import db
+
+		db_accounts = db.get_all_accounts()
+		if db_accounts:
+			print(f'[INFO] Loading {len(db_accounts)} account(s) from database')
+			accounts = []
+			for i, db_account in enumerate(db_accounts):
+				# 从数据库记录构建 AccountConfig
+				account_dict = {
+					'name': db_account['username'],
+					'provider': db_account['provider'],
+					'api_user': db_account['api_user'],
+					'email': db_account.get('email'),
+				}
+
+				# 根据认证方式处理 cookies
+				if db_account['auth_type'] == 'cookies':
+					account_dict['cookies'] = json.loads(db_account['cookies'])
+				elif db_account['auth_type'] == 'password':
+					# 密码认证模式下，cookies 为空，需要先登录
+					print(f'[WARNING] Account {db_account["username"]} uses password auth, cookies auth is recommended')
+					account_dict['cookies'] = json.loads(db_account.get('cookies', '{}'))
+
+				accounts.append(AccountConfig.from_dict(account_dict, i))
+
+			return accounts
+	except ImportError:
+		print('[INFO] Database module not available, falling back to environment variables')
+	except Exception as e:
+		print(f'[WARNING] Failed to load accounts from database: {e}, falling back to environment variables')
+
+	# Fallback: 从环境变量加载
 	accounts_str = os.getenv('ANYROUTER_ACCOUNTS')
 	if not accounts_str:
 		print('ERROR: ANYROUTER_ACCOUNTS environment variable not found')

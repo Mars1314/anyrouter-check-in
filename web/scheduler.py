@@ -90,6 +90,7 @@ async def auto_checkin_task():
 				api_user=api_user,
 				provider=account['provider'],
 				name=account['name'],
+				email=account.get('email'),
 			)
 
 			# 执行签到
@@ -130,6 +131,7 @@ async def auto_checkin_task():
 					api_user=api_user,
 					provider=account['provider'],
 					name=account['name'],
+					email=account.get('email'),
 				)
 				success, user_info = await check_in_account(account_config, 0, app_config)
 
@@ -150,11 +152,47 @@ async def auto_checkin_task():
 				db.add_balance_record(account['id'], user_info['quota'], user_info['used_quota'])
 				print(f'[SCHEDULER] 💰 {account["name"]}: 余额 ${user_info["quota"]}, 已使用 ${user_info["used_quota"]}')
 
+			# 发送个人邮件通知（如果配置了邮箱）
+			if account.get('email'):
+				status_text = '成功' if success else '失败'
+				email_title = f'AnyRouter 签到{status_text} - {account["name"]}'
+				email_content_lines = [
+					f'账号: {account["name"]}',
+					f'平台: {account["provider"]}',
+					f'状态: {"✅ 成功" if success else "❌ 失败"}',
+					f'时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+					'',
+				]
+
+				if user_info and user_info.get('success'):
+					email_content_lines.append(f'余额: ${user_info["quota"]}')
+					email_content_lines.append(f'已用: ${user_info["used_quota"]}')
+				elif not success:
+					email_content_lines.append(f'错误: {message}')
+
+				email_content = '\n'.join(email_content_lines)
+
+				try:
+					notify.send_email_to(account['email'], email_title, email_content, msg_type='text')
+					print(f'[SCHEDULER] 📧 {account["name"]}: 邮件通知已发送到 {account["email"]}')
+				except Exception as e:
+					print(f'[SCHEDULER] ⚠️ {account["name"]}: 发送邮件失败 - {str(e)[:50]}...')
+
 		except Exception as e:
 			error_msg = f'签到异常: {str(e)[:100]}'
 			print(f'[SCHEDULER] ❌ {account["name"]}: {error_msg}')
 			db.add_checkin_log(account['id'], False, error_msg)
 			failed_accounts.append({'name': account['name'], 'error': error_msg})
+
+			# 异常情况也发送个人邮件通知
+			if account.get('email'):
+				try:
+					error_email_title = f'AnyRouter 签到异常 - {account["name"]}'
+					error_email_content = f'账号: {account["name"]}\n状态: ❌ 异常\n错误: {str(e)}\n时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+					notify.send_email_to(account['email'], error_email_title, error_email_content, msg_type='text')
+					print(f'[SCHEDULER] 📧 {account["name"]}: 异常通知已发送到 {account["email"]}')
+				except Exception as email_error:
+					print(f'[SCHEDULER] ⚠️ {account["name"]}: 发送异常邮件失败 - {str(email_error)[:50]}...')
 
 	# 发送通知
 	total_count = len(accounts)

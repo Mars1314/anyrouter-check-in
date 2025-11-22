@@ -20,6 +20,27 @@ from utils.notify import notify
 load_dotenv()
 
 BALANCE_HASH_FILE = 'balance_hash.txt'
+WAF_COOKIES_CACHE_FILE = 'waf_cookies_cache.json'
+
+
+def load_waf_cookies_cache():
+	"""加载 WAF cookies 缓存"""
+	try:
+		if os.path.exists(WAF_COOKIES_CACHE_FILE):
+			with open(WAF_COOKIES_CACHE_FILE, 'r', encoding='utf-8') as f:
+				return json.load(f)
+	except Exception as e:
+		print(f'Warning: Failed to load WAF cookies cache: {e}')
+	return {}
+
+
+def save_waf_cookies_cache(cache_data):
+	"""保存 WAF cookies 缓存"""
+	try:
+		with open(WAF_COOKIES_CACHE_FILE, 'w', encoding='utf-8') as f:
+			json.dump(cache_data, f, ensure_ascii=False, indent=2)
+	except Exception as e:
+		print(f'Warning: Failed to save WAF cookies cache: {e}')
 
 
 def load_balance_hash():
@@ -152,18 +173,47 @@ def get_user_info(client, headers, user_info_url: str):
 		return {'success': False, 'error': f'Failed to get user info: {str(e)[:50]}...'}
 
 
-async def prepare_cookies(account_name: str, provider_config, user_cookies: dict) -> dict | None:
-	"""准备请求所需的 cookies（可能包含 WAF cookies）"""
+def is_waf_blocked(response):
+	"""检测是否被 WAF 拦截"""
+	if response.status_code in [412, 521, 403]:
+		return True
+	if 'acw_sc__v2' in response.text or '安全验证' in response.text:
+		return True
+	return False
+
+
+async def prepare_cookies(account_name: str, provider_config, user_cookies: dict, force_refresh: bool = False) -> dict | None:
+	"""准备请求所需的 cookies（优先使用缓存，失败时才获取新的 WAF cookies）"""
+	if not provider_config.needs_waf_cookies():
+		print(f'[INFO] {account_name}: Bypass WAF not required, using user cookies directly')
+		return user_cookies
+
+	# 尝试从缓存加载 WAF cookies
+	cache_key = f'{provider_config.domain}'
 	waf_cookies = {}
 
-	if provider_config.needs_waf_cookies():
+	if not force_refresh:
+		cache_data = load_waf_cookies_cache()
+		cached_cookies = cache_data.get(cache_key)
+		if cached_cookies:
+			print(f'[INFO] {account_name}: Using cached WAF cookies')
+			waf_cookies = cached_cookies
+		else:
+			print(f'[INFO] {account_name}: No cached WAF cookies found, will obtain new ones')
+
+	# 如果强制刷新或没有缓存，则获取新的 WAF cookies
+	if force_refresh or not waf_cookies:
 		login_url = f'{provider_config.domain}{provider_config.login_path}'
 		waf_cookies = await get_waf_cookies_with_playwright(account_name, login_url)
 		if not waf_cookies:
 			print(f'[FAILED] {account_name}: Unable to get WAF cookies')
 			return None
-	else:
-		print(f'[INFO] {account_name}: Bypass WAF not required, using user cookies directly')
+
+		# 保存到缓存
+		cache_data = load_waf_cookies_cache()
+		cache_data[cache_key] = waf_cookies
+		save_waf_cookies_cache(cache_data)
+		print(f'[INFO] {account_name}: WAF cookies cached for future use')
 
 	return {**waf_cookies, **user_cookies}
 
@@ -203,27 +253,8 @@ def execute_check_in(client, account_name: str, provider_config, headers: dict):
 		return False
 
 
-async def check_in_account(account: AccountConfig, account_index: int, app_config: AppConfig):
-	"""为单个账号执行签到操作"""
-	account_name = account.get_display_name(account_index)
-	print(f'\n[PROCESSING] Starting to process {account_name}')
-
-	provider_config = app_config.get_provider(account.provider)
-	if not provider_config:
-		print(f'[FAILED] {account_name}: Provider "{account.provider}" not found in configuration')
-		return False, None
-
-	print(f'[INFO] {account_name}: Using provider "{account.provider}" ({provider_config.domain})')
-
-	user_cookies = parse_cookies(account.cookies)
-	if not user_cookies:
-		print(f'[FAILED] {account_name}: Invalid configuration format')
-		return False, None
-
-	all_cookies = await prepare_cookies(account_name, provider_config, user_cookies)
-	if not all_cookies:
-		return False, None
-
+async def try_check_in_with_cookies(account_name: str, provider_config, account: AccountConfig, all_cookies: dict):
+	"""尝试使用给定的 cookies 进行签到"""
 	client = httpx.Client(http2=True, timeout=30.0)
 
 	try:
@@ -245,6 +276,14 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 
 		user_info_url = f'{provider_config.domain}{provider_config.user_info_path}'
 		user_info = get_user_info(client, headers, user_info_url)
+
+		# 检查是否被 WAF 拦截
+		if user_info and not user_info.get('success'):
+			error_msg = user_info.get('error', '')
+			if '403' in error_msg or '412' in error_msg or '521' in error_msg:
+				print(f'[INFO] {account_name}: Detected WAF block, will refresh cookies')
+				return False, None, True  # waf_blocked = True
+
 		if user_info and user_info.get('success'):
 			print(user_info['display'])
 		elif user_info:
@@ -252,16 +291,53 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 
 		if provider_config.needs_manual_check_in():
 			success = execute_check_in(client, account_name, provider_config, headers)
-			return success, user_info
+			return success, user_info, False
 		else:
 			print(f'[INFO] {account_name}: Check-in completed automatically (triggered by user info request)')
-			return True, user_info
+			return True, user_info, False
 
 	except Exception as e:
 		print(f'[FAILED] {account_name}: Error occurred during check-in process - {str(e)[:50]}...')
-		return False, None
+		return False, None, False
 	finally:
 		client.close()
+
+
+async def check_in_account(account: AccountConfig, account_index: int, app_config: AppConfig):
+	"""为单个账号执行签到操作（优化版：优先使用现有cookies，失败时才刷新）"""
+	account_name = account.get_display_name(account_index)
+	print(f'\n[PROCESSING] Starting to process {account_name}')
+
+	provider_config = app_config.get_provider(account.provider)
+	if not provider_config:
+		print(f'[FAILED] {account_name}: Provider "{account.provider}" not found in configuration')
+		return False, None
+
+	print(f'[INFO] {account_name}: Using provider "{account.provider}" ({provider_config.domain})')
+
+	user_cookies = parse_cookies(account.cookies)
+	if not user_cookies:
+		print(f'[FAILED] {account_name}: Invalid configuration format')
+		return False, None
+
+	# 第一次尝试：使用现有 cookies（可能包含缓存的 WAF cookies）
+	print(f'[INFO] {account_name}: Attempting check-in with existing cookies')
+	all_cookies = await prepare_cookies(account_name, provider_config, user_cookies, force_refresh=False)
+	if not all_cookies:
+		return False, None
+
+	success, user_info, waf_blocked = await try_check_in_with_cookies(account_name, provider_config, account, all_cookies)
+
+	# 如果遇到 WAF 拦截，刷新 cookies 后重试
+	if waf_blocked and provider_config.needs_waf_cookies():
+		print(f'[INFO] {account_name}: Refreshing WAF cookies and retrying...')
+		all_cookies = await prepare_cookies(account_name, provider_config, user_cookies, force_refresh=True)
+		if not all_cookies:
+			return False, None
+
+		success, user_info, _ = await try_check_in_with_cookies(account_name, provider_config, account, all_cookies)
+
+	return success, user_info
 
 
 async def main():
@@ -290,6 +366,7 @@ async def main():
 
 	for i, account in enumerate(accounts):
 		account_key = f'account_{i + 1}'
+		account_name = account.get_display_name(i)
 		try:
 			success, user_info = await check_in_account(account, i, app_config)
 			if success:
@@ -300,7 +377,6 @@ async def main():
 			if not success:
 				should_notify_this_account = True
 				need_notify = True
-				account_name = account.get_display_name(i)
 				print(f'[NOTIFY] {account_name} failed, will send notification')
 
 			if user_info and user_info.get('success'):
@@ -308,8 +384,44 @@ async def main():
 				current_used = user_info['used_quota']
 				current_balances[account_key] = {'quota': current_quota, 'used': current_used}
 
+			# 如果账号配置了邮箱,发送单独的签到通知
+			if account.email:
+				print(f'[EMAIL] {account_name}: 检测到邮箱配置: {account.email}')
+				status_text = 'Success' if success else 'Failed'
+				email_title = f'AnyRouter Check-in {status_text} - {account_name}'
+				email_content_lines = [
+					f'Account: {account_name}',
+					f'Provider: {account.provider}',
+					f'Status: {"[OK] Success" if success else "[FAIL] Failed"}',
+					f'Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+					'',
+				]
+
+				if user_info and user_info.get('success'):
+					email_content_lines.append(f'Balance: ${user_info["quota"]}')
+					email_content_lines.append(f'Used: ${user_info["used_quota"]}')
+				elif user_info:
+					email_content_lines.append(f'Error: {user_info.get("error", "Unknown error")}')
+
+				email_content = '\n'.join(email_content_lines)
+
+				print(f'[EMAIL] {account_name}: 准备发送邮件')
+				print(f'[EMAIL] {account_name}: 收件人: {account.email}')
+				print(f'[EMAIL] {account_name}: 标题: {email_title}')
+
+				try:
+					notify.send_email_to(account.email, email_title, email_content, msg_type='text')
+					print(f'[EMAIL] {account_name}: [OK] 邮件发送成功')
+				except Exception as e:
+					print(f'[EMAIL] {account_name}: [FAIL] 邮件发送失败')
+					print(f'[EMAIL] {account_name}: 错误类型: {type(e).__name__}')
+					print(f'[EMAIL] {account_name}: 错误详情: {str(e)}')
+					import traceback
+					traceback.print_exc()
+			else:
+				print(f'[EMAIL] {account_name}: 未配置邮箱，跳过邮件通知')
+
 			if should_notify_this_account:
-				account_name = account.get_display_name(i)
 				status = '[SUCCESS]' if success else '[FAIL]'
 				account_result = f'{status} {account_name}'
 				if user_info and user_info.get('success'):
@@ -319,10 +431,20 @@ async def main():
 				notification_content.append(account_result)
 
 		except Exception as e:
-			account_name = account.get_display_name(i)
 			print(f'[FAILED] {account_name} processing exception: {e}')
 			need_notify = True  # 异常也需要通知
 			notification_content.append(f'[FAIL] {account_name} exception: {str(e)[:50]}...')
+
+			# 异常时也尝试发送邮件通知
+			if account.email:
+				print(f'[EMAIL] {account_name}: 检测到异常，准备发送错误邮件到 {account.email}')
+				try:
+					error_email_title = f'AnyRouter Check-in Error - {account_name}'
+					error_email_content = f'Account: {account_name}\nStatus: [FAIL] Exception\nError: {str(e)}\nTime: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+					notify.send_email_to(account.email, error_email_title, error_email_content, msg_type='text')
+					print(f'[EMAIL] {account_name}: [OK] 错误邮件发送成功')
+				except Exception as email_error:
+					print(f'[EMAIL] {account_name}: [FAIL] 错误邮件发送失败: {str(email_error)}')
 
 	# 检查余额变化
 	current_balance_hash = generate_balance_hash(current_balances) if current_balances else None

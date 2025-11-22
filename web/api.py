@@ -5,6 +5,7 @@ FastAPI 后端 API
 
 import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Depends
@@ -65,6 +66,7 @@ class AccountCreate(BaseModel):
 	cookies: str | None = None
 	api_user: str | None = None
 	provider: str = 'anyrouter'
+	email: str | None = None
 
 
 class AccountUpdate(BaseModel):
@@ -74,11 +76,18 @@ class AccountUpdate(BaseModel):
 	api_user: str | None = None
 	provider: str | None = None
 	enabled: bool | None = None
+	email: str | None = None
 
 
 class TestLoginRequest(BaseModel):
 	username: str
 	password: str
+
+
+class SystemConfigUpdate(BaseModel):
+	email_user: str | None = None
+	email_pass: str | None = None
+	custom_smtp_server: str | None = None
 
 
 # ========== API 路由 ==========
@@ -91,6 +100,15 @@ async def read_root():
 	if html_file.exists():
 		return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
 	return {'message': 'AnyRouter 签到管理系统 API'}
+
+
+@app.get('/settings')
+async def settings():
+	"""返回系统设置页面"""
+	html_file = Path(__file__).parent / 'templates' / 'settings.html'
+	if html_file.exists():
+		return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
+	return {'message': '系统设置页面'}
 
 
 @app.get('/dashboard')
@@ -312,7 +330,8 @@ async def create_account(account: AccountCreate, current_user: dict = Depends(ge
 			password=account.password,
 			cookies=account.cookies,
 			api_user=account.api_user,
-			provider=account.provider
+			provider=account.provider,
+			email=account.email
 		)
 
 		auth_type = '密码认证' if has_password_auth else 'Cookies认证'
@@ -349,7 +368,8 @@ async def update_account(account_id: int, account: AccountUpdate, current_user: 
 			cookies=account.cookies,
 			api_user=account.api_user,
 			provider=account.provider,
-			enabled=account.enabled
+			enabled=account.enabled,
+			email=account.email
 		)
 		return {'success': True, 'message': '账号更新成功'}
 	except HTTPException:
@@ -442,6 +462,144 @@ async def get_balance_history(account_id: int, limit: int = 30, current_user: di
 		raise HTTPException(status_code=500, detail=str(e))
 
 
+# ========== 系统配置 ==========
+
+
+@app.get('/api/system-config')
+async def get_system_config(current_user: dict = Depends(require_admin)):
+	"""获取系统配置（仅管理员）"""
+	try:
+		configs = db.get_all_configs()
+		# 返回配置，包括密码明文（仅管理员可见）
+		return {
+			'success': True,
+			'data': {
+				'email_user': configs.get('email_user', ''),
+				'email_pass': configs.get('email_pass', ''),  # 返回明文密码
+				'custom_smtp_server': configs.get('custom_smtp_server', ''),
+			},
+		}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put('/api/system-config')
+async def update_system_config(config: SystemConfigUpdate, current_user: dict = Depends(require_admin)):
+	"""更新系统配置（仅管理员）"""
+	try:
+		if config.email_user is not None:
+			db.set_config('email_user', config.email_user, '发件邮箱地址')
+
+		if config.email_pass is not None:
+			db.set_config('email_pass', config.email_pass, 'SMTP 密码')
+
+		if config.custom_smtp_server is not None:
+			db.set_config('custom_smtp_server', config.custom_smtp_server, 'SMTP 服务器地址')
+
+		return {'success': True, 'message': '系统配置更新成功'}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/api/test-email')
+async def test_email(current_user: dict = Depends(require_admin)):
+	"""测试邮件配置（仅管理员）"""
+	try:
+		# 先直接从数据库读取配置
+		email_user = db.get_config('email_user')
+		email_pass = db.get_config('email_pass')
+		smtp_server = db.get_config('custom_smtp_server')
+
+		print(f'[DEBUG] From DB - email_user: {email_user}')
+		print(f'[DEBUG] From DB - email_pass: {email_pass}')
+		print(f'[DEBUG] From DB - smtp_server: {smtp_server}')
+
+		if not email_user or not email_pass:
+			raise HTTPException(status_code=400, detail=f'邮件配置未完成，请先配置发件邮箱和密码 (email_user={email_user}, email_pass={"已配置" if email_pass else "未配置"})')
+
+		# 手动创建邮件并发送
+		from email.mime.text import MIMEText
+		import smtplib
+
+		msg = MIMEText(f'''这是一封测试邮件
+
+发件邮箱: {email_user}
+SMTP 服务器: {smtp_server or "自动推断"}
+测试时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+如果您收到此邮件，说明邮件配置正确！
+
+---
+AnyRouter 签到管理系统''', 'plain', 'utf-8')
+
+		msg['From'] = f'AnyRouter Assistant <{email_user}>'
+		msg['To'] = email_user
+		msg['Subject'] = 'AnyRouter 系统测试邮件'
+
+		# 自动推断 SMTP 服务器
+		if not smtp_server:
+			smtp_server = f'smtp.{email_user.split("@")[1]}'
+
+		print(f'[DEBUG] Sending email via {smtp_server}...')
+		print(f'[DEBUG] Email user: {email_user}')
+
+		# 尝试多种连接方式
+		last_error = None
+
+		# 方式1: SSL 端口 465
+		try:
+			print('[DEBUG] Trying SSL on port 465...')
+			server = smtplib.SMTP_SSL(smtp_server, 465, timeout=10)
+			server.set_debuglevel(1)  # 启用调试输出
+			server.login(email_user, email_pass)
+			server.send_message(msg)
+			server.quit()
+			print('[DEBUG] SSL 465 succeeded!')
+			return {'success': True, 'message': f'测试邮件已发送到 {email_user}'}
+		except Exception as e:
+			last_error = str(e)
+			print(f'[DEBUG] SSL 465 failed: {e}')
+
+		# 方式2: STARTTLS 端口 587
+		try:
+			print('[DEBUG] Trying STARTTLS on port 587...')
+			server = smtplib.SMTP(smtp_server, 587, timeout=10)
+			server.set_debuglevel(1)
+			server.starttls()
+			server.login(email_user, email_pass)
+			server.send_message(msg)
+			server.quit()
+			print('[DEBUG] STARTTLS 587 succeeded!')
+			return {'success': True, 'message': f'测试邮件已发送到 {email_user}'}
+		except Exception as e:
+			last_error = str(e)
+			print(f'[DEBUG] STARTTLS 587 failed: {e}')
+
+		# 方式3: 普通 SMTP 端口 25
+		try:
+			print('[DEBUG] Trying SMTP on port 25...')
+			server = smtplib.SMTP(smtp_server, 25, timeout=10)
+			server.set_debuglevel(1)
+			server.starttls()
+			server.login(email_user, email_pass)
+			server.send_message(msg)
+			server.quit()
+			print('[DEBUG] SMTP 25 succeeded!')
+			return {'success': True, 'message': f'测试邮件已发送到 {email_user}'}
+		except Exception as e:
+			last_error = str(e)
+			print(f'[DEBUG] SMTP 25 failed: {e}')
+
+		# 所有方式都失败
+		raise Exception(f'所有SMTP连接方式都失败了。最后错误: {last_error}')
+	except HTTPException:
+		raise
+	except Exception as e:
+		import traceback
+		traceback.print_exc()
+		raise HTTPException(status_code=500, detail=f'发送测试邮件失败: {str(e)}')
+
+
 # ========== 统计信息 ==========
 
 
@@ -498,13 +656,37 @@ async def manual_checkin(account_id: int, current_user: dict = Depends(get_curre
 			if account.get('cookies') and account.get('api_user'):
 				# 尝试使用已保存的 cookies
 				try:
-					cookies = json.loads(account['cookies']) if isinstance(account['cookies'], str) else account['cookies']
-					api_user = account['api_user']
+					cookies_str = account['cookies']
+					# 检查是否为空字符串或只包含空白字符
+					if cookies_str and cookies_str.strip():
+						cookies = json.loads(cookies_str) if isinstance(cookies_str, str) else cookies_str
+						api_user = account['api_user']
+					else:
+						need_login = True
 				except:
 					need_login = True
 			else:
 				# 第一次登录，没有保存的 cookies
 				need_login = True
+
+			# 如果需要登录，先登录获取 cookies
+			if need_login:
+				print(f'[API] 密码认证账号首次登录: {account["name"]}')
+				login_result = await login_anyrouter(account['username'], account['password'])
+				if not login_result or not login_result.get('success'):
+					db.add_checkin_log(account_id, False, '自动登录失败')
+					raise HTTPException(status_code=400, detail='自动登录失败')
+
+				cookies = login_result['cookies']
+				api_user = login_result['api_user']
+
+				# 保存新的 cookies 和 api_user 到数据库
+				db.update_account(
+					account_id,
+					cookies=json.dumps(cookies) if isinstance(cookies, dict) else cookies,
+					api_user=api_user
+				)
+				print(f'[API] 已保存账号 {account["name"]} 的 cookies')
 		else:
 			# Cookies认证：直接使用保存的 cookies 和 api_user
 			cookies = json.loads(account['cookies']) if isinstance(account['cookies'], str) else account['cookies']
@@ -512,7 +694,11 @@ async def manual_checkin(account_id: int, current_user: dict = Depends(get_curre
 
 		# 构造账号配置
 		account_config = AccountConfig(
-			cookies=cookies, api_user=api_user, provider=account['provider'], name=account['name']
+			cookies=cookies,
+			api_user=api_user,
+			provider=account['provider'],
+			name=account['name'],
+			email=account.get('email'),
 		)
 
 		app_config = AppConfig.load_from_env()
@@ -521,12 +707,12 @@ async def manual_checkin(account_id: int, current_user: dict = Depends(get_curre
 		success, user_info = await check_in_account(account_config, 0, app_config)
 
 		# 如果签到失败且是密码认证，可能是 cookies 过期，尝试重新登录
-		if not success and account.get('auth_type') == 'password' and not need_login:
-			print(f'[API] Cookies 可能已过期，尝试重新登录账号: {account["name"]}')
+		if not success and account.get('auth_type') == 'password':
+			print(f'[API] 签到失败，尝试重新登录账号: {account["name"]}')
 			need_login = True
 
-		# 需要登录的情况：重新登录并保存 cookies
-		if need_login:
+		# 需要重新登录的情况（仅在已经签到失败后）
+		if not success and need_login:
 			login_result = await login_anyrouter(account['username'], account['password'])
 			if not login_result or not login_result.get('success'):
 				db.add_checkin_log(account_id, False, '自动登录失败')
@@ -545,7 +731,11 @@ async def manual_checkin(account_id: int, current_user: dict = Depends(get_curre
 
 			# 使用新的 cookies 重新签到
 			account_config = AccountConfig(
-				cookies=cookies, api_user=api_user, provider=account['provider'], name=account['name']
+				cookies=cookies,
+				api_user=api_user,
+				provider=account['provider'],
+				name=account['name'],
+				email=account.get('email'),
 			)
 			success, user_info = await check_in_account(account_config, 0, app_config)
 
