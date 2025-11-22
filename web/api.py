@@ -747,6 +747,49 @@ async def manual_checkin(account_id: int, current_user: dict = Depends(get_curre
 		if user_info and user_info.get('success'):
 			db.add_balance_record(account_id, user_info['quota'], user_info['used_quota'])
 
+		# 发送邮件通知（如果账号配置了邮箱）
+		print(f'[DEBUG] Checking email config for account: {account.get("email")}')
+		if account.get('email'):
+			print(f'[EMAIL] {account["name"]}: 检测到邮箱配置: {account["email"]}')
+			try:
+				# 每次发送邮件时创建新的 NotificationKit 实例，确保从数据库读取最新配置
+				from utils.notify import NotificationKit
+				notify = NotificationKit()
+
+				print(f'[DEBUG] notify.email_user = {notify.email_user}')
+				print(f'[DEBUG] notify.email_pass = {"configured" if notify.email_pass else "not configured"}')
+
+				status_text = 'Success' if success else 'Failed'
+				email_title = f'AnyRouter Check-in {status_text} - {account["name"]}'
+				email_content_lines = [
+					f'Account: {account["name"]}',
+					f'Provider: {account["provider"]}',
+					f'Status: {"[OK] Success" if success else "[FAIL] Failed"}',
+					f'Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+					'',
+				]
+
+				if user_info and user_info.get('success'):
+					email_content_lines.append(f'Balance: ${user_info["quota"]}')
+					email_content_lines.append(f'Used: ${user_info["used_quota"]}')
+				elif user_info:
+					email_content_lines.append(f'Error: {user_info.get("error", "Unknown error")}')
+
+				email_content = '\n'.join(email_content_lines)
+
+				print(f'[EMAIL] {account["name"]}: 准备发送邮件到 {account["email"]}')
+				print(f'[DEBUG] Email title: {email_title}')
+				print(f'[DEBUG] Email content: {email_content}')
+
+				notify.send_email_to(account['email'], email_title, email_content, msg_type='text')
+				print(f'[EMAIL] {account["name"]}: [OK] 邮件发送成功')
+			except Exception as e:
+				print(f'[EMAIL] {account["name"]}: [FAIL] 邮件发送失败: {str(e)}')
+				import traceback
+				traceback.print_exc()
+		else:
+			print(f'[DEBUG] Account {account["name"]} has no email configured, skipping email notification')
+
 		if success:
 			return {'success': True, 'message': '签到成功', 'data': user_info}
 		else:
